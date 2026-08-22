@@ -21,6 +21,7 @@ final class NaverMapsTestViewModel: ObservableObject {
     @Published private(set) var startPlace: GeocodedPlace?
     @Published private(set) var goalPlace: GeocodedPlace?
     @Published private(set) var geocodeResults: [GeocodedPlace] = []
+    @Published private(set) var locationResults: [NaverLocation] = []
     @Published private(set) var route: DrivingRoute?
     @Published private(set) var tappedAddress: ReverseGeocodedAddress?
 
@@ -32,11 +33,14 @@ final class NaverMapsTestViewModel: ObservableObject {
     let map = NaverMapWebController()
 
     private let geocodingService: NaverGeocodingServicing
+    private let locationSearchService: NaverLocationSearchServicing
     private let directionsService: NaverDirectionsServicing
 
     init(geocodingService: NaverGeocodingServicing = NaverGeocodingService(),
+         locationSearchService: NaverLocationSearchServicing = NaverLocationSearchService(),
          directionsService: NaverDirectionsServicing = NaverDirectionsService()) {
         self.geocodingService = geocodingService
+        self.locationSearchService = locationSearchService
         self.directionsService = directionsService
 
         // 지도를 탭하면 곧바로 역지오코딩해서 주소를 보여 준다.
@@ -53,6 +57,9 @@ final class NaverMapsTestViewModel: ObservableObject {
         }
         if !AppConfig.hasNaverMapsRESTCredentials {
             return "Client Secret 이 없어 주소 검색/경로 탐색이 동작하지 않습니다."
+        }
+        if !AppConfig.hasNaverSearchCredentials {
+            return "검색 API 키가 없어 장소명 도착지 검색이 동작하지 않습니다. Naver_Search_Client_ID/Secret을 설정해 주세요."
         }
         return nil
     }
@@ -71,18 +78,30 @@ final class NaverMapsTestViewModel: ObservableObject {
         }
     }
 
-    /// 주소 → 좌표. 결과 목록을 지도에 마커로 찍는다.
+    /// 출발지는 주소 지오코딩, 도착지는 업체/기관명 지역 검색을 사용한다.
     func search(_ endpoint: Endpoint) async {
         let query = endpoint == .start ? startQuery : goalQuery
-        await run(status: "\(endpoint.title) 주소를 검색하는 중…") {
-            let places = try await self.geocodingService.geocode(query: query, near: nil, limit: 10)
-            self.geocodeResults = places
-
-            if let first = places.first {
-                self.select(first, as: endpoint)
+        await run(status: "\(endpoint.title)을 검색하는 중…") {
+            switch endpoint {
+            case .start:
+                let places = try await self.geocodingService.geocode(query: query, near: nil, limit: 10)
+                self.locationResults = []
+                self.geocodeResults = places
+                if let first = places.first { self.select(first, as: .start) }
+                self.statusMessage = "출발지 주소 검색 결과 \(places.count)건"
+            case .goal:
+                let locations = try await self.locationSearchService.search(query: query, display: 5)
+                self.geocodeResults = []
+                self.locationResults = locations
+                if let first = locations.first { self.select(first) }
+                self.statusMessage = "도착지 장소 검색 결과 \(locations.count)건"
             }
-            self.statusMessage = "\(endpoint.title) 검색 결과 \(places.count)건"
         }
+    }
+
+    func select(_ location: NaverLocation) {
+        goalQuery = location.title
+        select(location.geocodedPlace, as: .goal)
     }
 
     /// 검색 결과 중 하나를 출발지/도착지로 지정한다.
@@ -113,7 +132,9 @@ final class NaverMapsTestViewModel: ObservableObject {
                 self.startPlace = try await self.geocodingService.firstPlace(matching: self.startQuery)
             }
             if self.goalPlace == nil {
-                self.goalPlace = try await self.geocodingService.firstPlace(matching: self.goalQuery)
+                let results = try await self.locationSearchService.search(query: self.goalQuery, display: 1)
+                guard let first = results.first else { throw NaverLocationSearchError.emptyResult }
+                self.goalPlace = first.geocodedPlace
             }
             guard let start = self.startPlace, let goal = self.goalPlace else {
                 throw NaverMapsError.emptyResult
@@ -125,6 +146,7 @@ final class NaverMapsTestViewModel: ObservableObject {
                                                                option: self.option)
             self.route = route
             self.geocodeResults = []
+            self.locationResults = []
             self.map.showRoute(route)
             self.statusMessage = """
             \(self.option.koreanTitle) · \(route.distanceDescription) · \(route.durationDescription) \
@@ -148,6 +170,7 @@ final class NaverMapsTestViewModel: ObservableObject {
         startPlace = nil
         goalPlace = nil
         geocodeResults = []
+        locationResults = []
         route = nil
         tappedAddress = nil
         statusMessage = nil

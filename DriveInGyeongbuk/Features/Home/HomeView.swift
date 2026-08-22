@@ -10,6 +10,7 @@ import SwiftUI
 struct HomeView: View {
 
     @State private var isShowingNaverMapsTest = false
+    @State private var isShowingLocationSearchTest = false
     @State private var isShowingSpeedLimitTest = false
     @State private var isShowingParkingTest = false
 
@@ -39,6 +40,14 @@ struct HomeView: View {
                 .buttonStyle(.borderedProminent)
 
                 Button {
+                    isShowingLocationSearchTest = true
+                } label: {
+                    Label("도착지 검색 API 테스트", systemImage: "magnifyingglass")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+
+                Button {
                     isShowingSpeedLimitTest = true
                 } label: {
                     Label("SpeedLimit 서비스 테스트", systemImage: "gauge.with.needle")
@@ -58,6 +67,9 @@ struct HomeView: View {
         .padding(24)
         .fullScreenCover(isPresented: $isShowingNaverMapsTest) {
             NaverMapsTestView(onClose: { isShowingNaverMapsTest = false })
+        }
+        .fullScreenCover(isPresented: $isShowingLocationSearchTest) {
+            NaverLocationSearchTestView(onClose: { isShowingLocationSearchTest = false })
         }
         .fullScreenCover(isPresented: $isShowingSpeedLimitTest) {
             SpeedLimitTestView(onClose: { isShowingSpeedLimitTest = false })
