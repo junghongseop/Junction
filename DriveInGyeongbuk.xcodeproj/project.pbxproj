@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		A968E8DD30398EB900F4162B /* NMapsMap in Frameworks */ = {isa = PBXBuildFile; productRef = A968E8DC30398EB900F4162B /* NMapsMap */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		A96417B03039671D001FF543 /* DriveInGyeongbuk.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DriveInGyeongbuk.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -37,6 +41,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A968E8DD30398EB900F4162B /* NMapsMap in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -79,6 +84,7 @@
 			);
 			name = DriveInGyeongbuk;
 			packageProductDependencies = (
+				A968E8DC30398EB900F4162B /* NMapsMap */,
 			);
 			productName = DriveInGyeongbuk;
 			productReference = A96417B03039671D001FF543 /* DriveInGyeongbuk.app */;
@@ -108,6 +114,9 @@
 			);
 			mainGroup = A96417A73039671D001FF543;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				A968E8DB30398EB900F4162B /* XCRemoteSwiftPackageReference "SPM-NMapsMap" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = A96417B13039671D001FF543 /* Products */;
 			projectDirPath = "";
@@ -348,6 +357,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		A968E8DB30398EB900F4162B /* XCRemoteSwiftPackageReference "SPM-NMapsMap" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/navermaps/SPM-NMapsMap";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 3.23.3;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A968E8DC30398EB900F4162B /* NMapsMap */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A968E8DB30398EB900F4162B /* XCRemoteSwiftPackageReference "SPM-NMapsMap" */;
+			productName = NMapsMap;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = A96417A83039671D001FF543 /* Project object */;
 }
