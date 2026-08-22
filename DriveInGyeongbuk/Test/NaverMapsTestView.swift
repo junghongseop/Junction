@@ -50,6 +50,9 @@ struct NaverMapsTestView: View {
                         if !viewModel.geocodeResults.isEmpty {
                             geocodeResultsSection
                         }
+                        if !viewModel.locationResults.isEmpty {
+                            locationResultsSection
+                        }
                         if let route = viewModel.route {
                             routeSummarySection(route)
                             stepsSection(route)
@@ -78,7 +81,7 @@ struct NaverMapsTestView: View {
 
     private var searchSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            sectionTitle("1. 주소 검색 (Geocoding)")
+            sectionTitle("1. 출발지 주소 · 도착지 장소 검색")
 
             queryField(title: "출발지",
                        text: $viewModel.startQuery,
@@ -89,6 +92,10 @@ struct NaverMapsTestView: View {
                        text: $viewModel.goalQuery,
                        place: viewModel.goalPlace,
                        endpoint: .goal)
+
+            Text("도착지는 네이버 지역 검색 API로 업체·기관명을 검색합니다. (예: 불국사, 경주역)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
             Text("지도를 탭하면 그 지점의 주소를 역지오코딩합니다.")
                 .font(.caption)
@@ -212,6 +219,30 @@ struct NaverMapsTestView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(10)
                 .background(.quaternary.opacity(0.4), in: .rect(cornerRadius: 10))
+            }
+        }
+    }
+
+    private var locationResultsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionTitle("도착지 검색 결과 \(viewModel.locationResults.count)건")
+            ForEach(viewModel.locationResults) { location in
+                Button { viewModel.select(location) } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(location.title).font(.callout.bold())
+                        if !location.category.isEmpty {
+                            Text(location.category).font(.caption2).foregroundStyle(.secondary)
+                        }
+                        Text(location.displayAddress).font(.caption)
+                        Text(location.coordinate.apiQueryValue)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(.quaternary.opacity(0.4), in: .rect(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
             }
         }
     }
