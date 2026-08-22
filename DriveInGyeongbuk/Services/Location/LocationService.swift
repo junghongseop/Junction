@@ -132,7 +132,7 @@ protocol RouteLocationSimulating: AnyObject {
     func stop()
 }
 
-/// 실제 GPS 대신 선택 경로 위를 일정 속도로 이동하는 좌표 공급자.
+/// 실제 GPS 대신 선택 경로 위를 자연스러운 가감속과 조향으로 이동하는 좌표 공급자.
 final class RouteLocationSimulator: RouteLocationSimulating {
     var onChange: ((RouteSimulationState) -> Void)?
 
@@ -142,6 +142,12 @@ final class RouteLocationSimulator: RouteLocationSimulating {
     private var speedLimitSegments: [RouteSpeedLimitSegment] = []
     private var traveledDistance: Double = 0
     private var maximumSpeedKPH: Double = 0
+    private var simulatedSpeedKPH: Double = 0
+    private var smoothedBearing: Double?
+    private var cruiseFactor: Double = 0.9
+    private var accelerationKPHPerSecond: Double = 5
+    private var decelerationKPHPerSecond: Double = 7
+    private var nextCruiseAdjustment = Date.distantPast
     private var lastTick: Date?
 
     func start(route: DrivingRoute,
@@ -159,10 +165,13 @@ final class RouteLocationSimulator: RouteLocationSimulating {
                                        + route.path[index - 1].distance(to: route.path[index]))
         }
         traveledDistance = 0
+        simulatedSpeedKPH = 0
+        smoothedBearing = nil
+        chooseNextCruiseBehavior(at: Date())
         lastTick = Date()
         publishState()
 
-        timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
             self?.tick()
         }
     }
@@ -174,6 +183,8 @@ final class RouteLocationSimulator: RouteLocationSimulating {
         cumulativeDistances = []
         speedLimitSegments = []
         traveledDistance = 0
+        simulatedSpeedKPH = 0
+        smoothedBearing = nil
         lastTick = nil
     }
 
@@ -181,7 +192,23 @@ final class RouteLocationSimulator: RouteLocationSimulating {
         let now = Date()
         let delta = min(0.5, now.timeIntervalSince(lastTick ?? now))
         lastTick = now
-        traveledDistance += currentSpeedKPH(at: traveledDistance) / 3.6 * delta
+        if now >= nextCruiseAdjustment { chooseNextCruiseBehavior(at: now) }
+
+        let desiredSpeed = desiredSpeedKPH(at: traveledDistance)
+        let rate = desiredSpeed >= simulatedSpeedKPH
+            ? accelerationKPHPerSecond
+            : decelerationKPHPerSecond
+        let maximumChange = rate * delta
+        let difference = desiredSpeed - simulatedSpeedKPH
+        simulatedSpeedKPH += min(max(difference, -maximumChange), maximumChange)
+        simulatedSpeedKPH = max(0, simulatedSpeedKPH)
+        traveledDistance += simulatedSpeedKPH / 3.6 * delta
+        if let totalDistance = cumulativeDistances.last,
+           totalDistance - traveledDistance < 1.5 {
+            traveledDistance = totalDistance
+            simulatedSpeedKPH = 0
+        }
+        updateBearing(delta: delta)
         publishState()
     }
 
@@ -189,20 +216,11 @@ final class RouteLocationSimulator: RouteLocationSimulating {
         guard let route, let totalDistance = cumulativeDistances.last else { return }
         traveledDistance = min(traveledDistance, totalDistance)
 
-        let segmentIndex = segment(containing: traveledDistance)
-        let start = route.path[segmentIndex]
-        let endIndex = min(segmentIndex + 1, route.path.count - 1)
-        let end = route.path[endIndex]
-        let segmentStart = cumulativeDistances[segmentIndex]
-        let segmentLength = max(0.001, cumulativeDistances[endIndex] - segmentStart)
-        let progress = min(1, max(0, (traveledDistance - segmentStart) / segmentLength))
-        let coordinate = NaverCoordinate(
-            latitude: start.latitude + (end.latitude - start.latitude) * progress,
-            longitude: start.longitude + (end.longitude - start.longitude) * progress
-        )
+        let sample = coordinate(at: traveledDistance)
+        let segmentIndex = sample.pathIndex
+        let coordinate = sample.coordinate
         let remainingDistance = max(0, totalDistance - traveledDistance)
         let speedLimit = reliableSpeedLimit(at: traveledDistance)
-        let currentSpeed = currentSpeedKPH(at: traveledDistance)
         let nextStep = route.steps.first { $0.pointIndex > segmentIndex }
         let nextStepDistance = nextStep.map {
             max(0, cumulativeDistances[min($0.pointIndex, cumulativeDistances.count - 1)] - traveledDistance)
@@ -211,13 +229,13 @@ final class RouteLocationSimulator: RouteLocationSimulating {
 
         onChange?(RouteSimulationState(
             coordinate: coordinate,
-            bearing: Self.bearing(from: start, to: end),
+            bearing: smoothedBearing ?? desiredBearing(),
             pathIndex: segmentIndex,
             remainingDistance: remainingDistance,
             remainingDuration: remainingDuration(from: traveledDistance, totalDistance: totalDistance),
             nextStep: nextStep,
             distanceToNextStep: nextStepDistance,
-            currentSpeedKPH: Int(currentSpeed.rounded()),
+            currentSpeedKPH: Int(simulatedSpeedKPH.rounded()),
             speedLimitKPH: speedLimit,
             isFinished: finished
         ))
@@ -244,8 +262,64 @@ final class RouteLocationSimulator: RouteLocationSimulating {
         }?.limitKPH
     }
 
-    private func currentSpeedKPH(at distance: Double) -> Double {
-        min(maximumSpeedKPH, Double(reliableSpeedLimit(at: distance) ?? Int(maximumSpeedKPH)))
+    private func desiredSpeedKPH(at distance: Double) -> Double {
+        guard let totalDistance = cumulativeDistances.last else { return 0 }
+        let roadMaximum = min(maximumSpeedKPH,
+                              Double(reliableSpeedLimit(at: distance) ?? Int(maximumSpeedKPH)))
+        var desired = roadMaximum * cruiseFactor
+
+        // 목적지에 가까워지면 일정한 감속도로 자연스럽게 0까지 내려간다.
+        let remaining = max(0, totalDistance - distance)
+        let stoppingSpeed = sqrt(2 * 1.8 * remaining) * 3.6
+        desired = min(desired, stoppingSpeed)
+        return max(0, desired)
+    }
+
+    private func chooseNextCruiseBehavior(at date: Date) {
+        cruiseFactor = Double.random(in: 0.82...0.99)
+        accelerationKPHPerSecond = Double.random(in: 5.5...9.0)
+        decelerationKPHPerSecond = Double.random(in: 4.0...8.0)
+        nextCruiseAdjustment = date.addingTimeInterval(Double.random(in: 2.5...6.0))
+    }
+
+    private func updateBearing(delta: TimeInterval) {
+        let target = desiredBearing()
+        guard let current = smoothedBearing else {
+            smoothedBearing = target
+            return
+        }
+        let shortestDifference = (target - current + 540).truncatingRemainder(dividingBy: 360) - 180
+        let smoothing = 1 - exp(-3.2 * delta)
+        smoothedBearing = (current + shortestDifference * smoothing + 360)
+            .truncatingRemainder(dividingBy: 360)
+    }
+
+    private func desiredBearing() -> Double {
+        guard cumulativeDistances.count >= 2 else { return 0 }
+        let current = coordinate(at: traveledDistance).coordinate
+        // 속도가 빠를수록 더 멀리 내다봐 작은 경로 꺾임에 카메라가 흔들리지 않게 한다.
+        let lookAhead = min(70, max(18, simulatedSpeedKPH / 3.6 * 1.5))
+        let ahead = coordinate(at: traveledDistance + lookAhead).coordinate
+        guard current.distance(to: ahead) > 0.5 else { return smoothedBearing ?? 0 }
+        return Self.bearing(from: current, to: ahead)
+    }
+
+    private func coordinate(at distance: Double) -> (coordinate: NaverCoordinate, pathIndex: Int) {
+        guard let route, route.path.count >= 2 else {
+            return (NaverCoordinate(latitude: 0, longitude: 0), 0)
+        }
+        let clampedDistance = min(max(0, distance), cumulativeDistances.last ?? 0)
+        let pathIndex = segment(containing: clampedDistance)
+        let endIndex = min(pathIndex + 1, route.path.count - 1)
+        let segmentStart = cumulativeDistances[pathIndex]
+        let segmentLength = max(0.001, cumulativeDistances[endIndex] - segmentStart)
+        let progress = min(1, max(0, (clampedDistance - segmentStart) / segmentLength))
+        let start = route.path[pathIndex]
+        let end = route.path[endIndex]
+        return (NaverCoordinate(
+            latitude: start.latitude + (end.latitude - start.latitude) * progress,
+            longitude: start.longitude + (end.longitude - start.longitude) * progress
+        ), pathIndex)
     }
 
     private func remainingDuration(from distance: Double, totalDistance: Double) -> TimeInterval {
