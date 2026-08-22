@@ -21,8 +21,13 @@
 프로토콜과 도메인 모델만 정의되어 있고 구현부는 `[]` / `nil` / `TODO` 다.
 파일 헤더에 `⚠️ 아직 껍데기(stub)입니다` 주석이 붙어 있으면 미구현이라는 뜻이다.
 
-제품 UI도 아직 없다. `HomeView` 는 서비스 계층 검증용 테스트 화면(`Test/`)으로 가는
-버튼만 갖고 있다.
+제품 UI 는 **첫 화면(홈)까지** 있다. `HomeView` 가 Map / Trip / Settings 세 탭을 가진
+`TabView` 이고, Map 탭(`Features/Home/Map`)이 현재 위치를 중심으로 지도를 띄운다.
+Trip 탭과 Settings 의 설정 항목은 아직 껍데기다. 목적지 검색 필드도 입력만 받고
+아직 Geocoding 을 태우지 않는다.
+
+서비스 계층 검증용 화면(`Test/`)은 **Settings 탭 > Developer 섹션**에 있다.
+제품 출시 전에 그 섹션을 통째로 걷어내면 된다.
 
 ## 빌드 · 실행
 
@@ -51,10 +56,12 @@ View (SwiftUI)  →  ViewModel (ObservableObject)  →  Service (protocol + stru
 DriveInGyeongbuk/
 ├── App/          @main 진입점
 ├── Config/       AppConfig(키 주입) · Config.xcconfig(gitignore)
-├── Features/     화면 단위. 현재 Home 뿐 — 앞으로 여기에 제품 UI 를 쌓는다
+├── Features/     화면 단위. 앞으로 여기에 제품 UI 를 쌓는다
+│   └── Home/        HomeView(TabView) + Map / Trip / Settings
 ├── Services/     도메인 로직. 화면을 몰라야 한다
 │   ├── NaverMaps/   ✅ 구현 완료
 │   ├── SpeedLimit/  ✅ 구현 완료 (번들 SQLite 기반, 오프라인)
+│   ├── Location/    ✅ 현재 위치 (CoreLocation 래퍼)
 │   ├── RoadSign/    ⬜ stub
 │   ├── TollGate/    ⬜ stub
 │   ├── Parking/     ✅ 구현 완료 (Junction 백엔드 · 공용 전송 계층도 여기 있다)
@@ -160,10 +167,17 @@ Config/Config.xcconfig (gitignore)  →  Info.plist ($(변수))  →  AppConfig 
 `Test/NaverMapWebView.swift` 다. NCP 콘솔의 **Web 서비스 URL** 에
 `AppConfig.naverMapWebServiceURL`(기본 `https://localhost`)과 같은 값을 등록해야 지도가 뜬다.
 
-네이티브 SDK(`NMapsMap`, SPM 3.23.3)는 이미 프로젝트에 추가되어 있다. 제품 화면에서
-네이티브로 갈아탈 때는 `NaverMapWebController` 와 **같은 인터페이스**
-(`focus` / `showMarkers` / `showRoute` / `highlight` / `clear`)를 갖는 구현으로 교체하면
-나머지 코드는 그대로 둘 수 있다.
+**제품 화면은 네이티브 SDK**(`NMapsMap`, SPM 3.23.3)를 쓴다 →
+`Features/Home/Map/NaverMapView.swift`. 현위치 추적(`positionMode`)과 야간 스타일이
+필요해서 웹 대신 네이티브로 갔다. 컨트롤러(`NaverMapController`)는 `NaverMapWebController`
+와 이름을 맞췄지만 아직 `focus` / `moveToCurrentLocation` / `clear` 만 구현되어 있다.
+`showMarkers` / `showRoute` / `highlight` 는 경로 안내 화면을 붙일 때 채운다.
+
+네이티브 SDK 는 **Mobile Dynamic Map** 서비스 + iOS 번들 ID 등록이 필요하다
+(Web 서비스 URL 과는 별개). 키는 `DriveInGyeongbukApp.configureNaverMapsSDK()` 가
+`AppConfig` 를 거쳐 `NMFAuthManager.shared().ncpKeyId` 에 넣는다.
+Info.plist 의 `NMFNcpKeyId` 는 쓰지 않는다 — 키가 비었을 때 `$(...)` 가 그대로
+넘어가 인증 실패 팝업만 뜨기 때문이다.
 
 ## 제한속도 데이터셋
 
