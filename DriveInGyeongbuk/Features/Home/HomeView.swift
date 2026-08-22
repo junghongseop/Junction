@@ -11,6 +11,7 @@ struct HomeView: View {
 
     @State private var isShowingNaverMapsTest = false
     @State private var isShowingSpeedLimitTest = false
+    @State private var isShowingParkingTest = false
 
     var body: some View {
         VStack(spacing: 24) {
@@ -44,6 +45,14 @@ struct HomeView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
+
+                Button {
+                    isShowingParkingTest = true
+                } label: {
+                    Label("Parking · Enforcement 서비스 테스트", systemImage: "parkingsign.circle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
             }
         }
         .padding(24)
@@ -52,6 +61,9 @@ struct HomeView: View {
         }
         .fullScreenCover(isPresented: $isShowingSpeedLimitTest) {
             SpeedLimitTestView(onClose: { isShowingSpeedLimitTest = false })
+        }
+        .fullScreenCover(isPresented: $isShowingParkingTest) {
+            ParkingTestView(onClose: { isShowingParkingTest = false })
         }
     }
 }

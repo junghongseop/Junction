@@ -78,6 +78,16 @@ final class NaverMapWebController: ObservableObject {
         evaluate("window.appBridge.setRoute(\(pathJSON), \(markersJSON));")
     }
 
+    /// 폴리라인 여러 개와 마커를 한 번에 그린다.
+    ///
+    /// 주정차 금지구역처럼 "선 여러 개 + 점 여러 개"를 함께 보여야 할 때 쓴다.
+    /// `showRoute` 와 달리 색을 선마다 따로 줄 수 있다.
+    func showOverlays(polylines: [Polyline], markers: [Marker], fitBounds: Bool = true) {
+        guard let polylineJSON = Self.jsonString(polylines.map(\.jsonObject)),
+              let markersJSON = Self.jsonString(markers.map(\.jsonObject)) else { return }
+        evaluate("window.appBridge.setOverlays(\(polylineJSON), \(markersJSON), \(fitBounds));")
+    }
+
     /// 특정 안내 지점을 강조 표시한다.
     func highlight(_ coordinate: NaverCoordinate, label: String) {
         let escaped = Self.escapeForJavaScript(label)
@@ -135,6 +145,18 @@ final class NaverMapWebController: ObservableObject {
              "lng": coordinate.longitude,
              "title": title,
              "color": color]
+        }
+    }
+
+    struct Polyline {
+        var coordinates: [NaverCoordinate]
+        var color: String
+        var width: Int = 6
+
+        var jsonObject: [String: Any] {
+            ["path": coordinates.map { [$0.latitude, $0.longitude] },
+             "color": color,
+             "width": width]
         }
     }
 
@@ -269,7 +291,7 @@ private extension NaverMapWebView {
       <script>
         var CLIENT_ID = "__CLIENT_ID__";
         var AUTH_PARAM = "__AUTH_PARAM__";
-        var map = null, polyline = null, markers = [], highlightMarker = null;
+        var map = null, polyline = null, polylines = [], markers = [], highlightMarker = null;
 
         function post(name, body) {
           try {
@@ -292,6 +314,8 @@ private extension NaverMapWebView {
 
         function clearOverlays() {
           if (polyline) { polyline.setMap(null); polyline = null; }
+          polylines.forEach(function (p) { p.setMap(null); });
+          polylines = [];
           markers.forEach(function (m) { m.setMap(null); });
           markers = [];
           if (highlightMarker) { highlightMarker.setMap(null); highlightMarker = null; }
@@ -350,6 +374,35 @@ private extension NaverMapWebView {
             fitTo(latLngs.length ? latLngs : (markerSpecs || []).map(function (s) {
               return new naver.maps.LatLng(s.lat, s.lng);
             }));
+          },
+
+          setOverlays: function (lineSpecs, markerSpecs, shouldFit) {
+            if (!map) { return; }
+            clearOverlays();
+            var points = [];
+
+            (lineSpecs || []).forEach(function (spec) {
+              var latLngs = (spec.path || []).map(function (p) {
+                return new naver.maps.LatLng(p[0], p[1]);
+              });
+              latLngs.forEach(function (p) { points.push(p); });
+              // 점이 하나뿐인 구간(시작점=종료점)은 선으로 그릴 수 없다. 호출부에서 마커로 표시한다.
+              if (latLngs.length < 2) { return; }
+              polylines.push(new naver.maps.Polyline({
+                map: map, path: latLngs,
+                strokeColor: spec.color || "#D1345B",
+                strokeOpacity: 0.85,
+                strokeWeight: spec.width || 6
+              }));
+            });
+
+            (markerSpecs || []).forEach(function (spec) {
+              markers.push(makeMarker(spec));
+              points.push(new naver.maps.LatLng(spec.lat, spec.lng));
+            });
+
+            if (shouldFit && points.length > 1) { fitTo(points); }
+            else if (shouldFit && points.length === 1) { map.setCenter(points[0]); map.setZoom(15); }
           },
 
           highlight: function (lat, lng, label) {

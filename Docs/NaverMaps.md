@@ -49,8 +49,13 @@ Services/
 │   └── SpeedLimitService.swift         경로 구간 분할 · 초과 경고 / 감속 예고
 ├── RoadSign/           ⬜ 껍데기 (한국어 표지판 인식 · 외국어 해설)
 ├── TollGate/           ⬜ 껍데기 (톨게이트 차로 안내)
-├── Parking/            ⬜ 껍데기 (도착지 인근 주차장)
-└── Enforcement/        ⬜ 껍데기 (주정차 단속 구간)
+├── Parking/            ✅ 구현 완료 (도착지 인근 주차장 — Junction 백엔드)
+│   ├── JunctionServerAPI.swift         백엔드 공용 전송 계층 (Enforcement 도 같이 쓴다)
+│   ├── ParkingAPIClient.swift          GET /api/v1/parking-lots
+│   └── ParkingService.swift            거리순 정렬 · 도보 시간 추정 · 캐싱
+└── Enforcement/        ✅ 구현 완료 (주정차 금지구역 — Junction 백엔드)
+    ├── EnforcementAPIClient.swift      GET /api/v1/parking-restrictions · 요일별 시간표 파싱
+    └── EnforcementService.swift        폴리라인 근접 판정 · 단속 시간대 판정 · 안내 문구
 ```
 
 `NaverDirectionsService` 가 만든 `DrivingRoute` 가 나머지 서비스의 공통 입력입니다.

@@ -16,8 +16,9 @@
 
 ## 현재 상태 (중요)
 
-**`Services/NaverMaps` 와 `Services/SpeedLimit` 이 실제로 동작한다.** 나머지 서비스는
-전부 껍데기(stub)로, 프로토콜과 도메인 모델만 정의되어 있고 구현부는 `[]` / `nil` / `TODO` 다.
+**`Services/NaverMaps` · `Services/SpeedLimit` · `Services/Parking` · `Services/Enforcement` 가
+실제로 동작한다.** 나머지 서비스(`RoadSign`, `TollGate`)는 껍데기(stub)로,
+프로토콜과 도메인 모델만 정의되어 있고 구현부는 `[]` / `nil` / `TODO` 다.
 파일 헤더에 `⚠️ 아직 껍데기(stub)입니다` 주석이 붙어 있으면 미구현이라는 뜻이다.
 
 제품 UI도 아직 없다. `HomeView` 는 서비스 계층 검증용 테스트 화면(`Test/`)으로 가는
@@ -56,8 +57,8 @@ DriveInGyeongbuk/
 │   ├── SpeedLimit/  ✅ 구현 완료 (번들 SQLite 기반, 오프라인)
 │   ├── RoadSign/    ⬜ stub
 │   ├── TollGate/    ⬜ stub
-│   ├── Parking/     ⬜ stub
-│   └── Enforcement/ ⬜ stub
+│   ├── Parking/     ✅ 구현 완료 (Junction 백엔드 · 공용 전송 계층도 여기 있다)
+│   └── Enforcement/ ✅ 구현 완료 (Junction 백엔드)
 ├── Resources/    Assets.xcassets
 └── Test/         [테스트 전용] 서비스 계층 검증 화면. 제품 코드가 아니다
 ```
@@ -202,6 +203,50 @@ service.alert(at: here, speedKPH: 82)               // 주행 중: 초과 경고
 - 이 데이터셋에는 **단속 카메라 · 보호구역 · 구간단속이 없다.** 별도 소스가 필요하다.
 - 시청·관광지 같은 건물 좌표는 도로에서 70~100m 떨어져 있어 매칭되지 않는 게 정상이다.
   (매칭 허용 거리 기본값 `matchToleranceMeters = 35`)
+
+## 주차장 · 주정차 금지구역 백엔드
+
+`Services/Parking` 과 `Services/Enforcement` 는 별도 백엔드를 쓴다. 앱에는 키가 필요 없다.
+
+```
+https://junction-server.onrender.com   (스펙: /docs, /openapi.json)
+  GET /api/v1/parking-lots          목적지 반경 2km 주차장
+  GET /api/v1/parking-restrictions  목적지 반경 2km 주정차 금지구역
+  GET /health
+```
+
+전송 계층은 `Services/Parking/JunctionServerAPI.swift` 한 곳에 있고 두 서비스가 나눠 쓴다.
+구조는 `NaverMapsRequestRunner` 와 같다 (`JunctionServerHTTPClient` 로 목 교체 가능).
+
+```swift
+let parking = ParkingService()
+try await parking.suggestions(near: route.goal, radiusMeters: 1000)   // 거리순 · 도보 시간 포함
+
+let enforcement = EnforcementService()
+try await enforcement.zones(near: route.goal, radiusMeters: 1000)     // 도착 전 1회 (네트워크)
+enforcement.warnings(at: here)                                        // 위치 갱신마다 (메모리)
+```
+
+주의할 점
+
+- **검색 반경은 서버에서 2km 고정**이다. 쿼리로 못 바꾼다. 더 좁게 보려면 받아온 뒤 앱에서
+  잘라낸다 — 두 서비스의 `radiusMeters` 인자가 그 일을 한다(2km 초과분은 무시된다).
+- **경상북도 전용**이다. 도 밖 좌표는 400 → `JunctionServerError.outsideCoverage`.
+- 서버가 요청마다 원본 데이터를 읽고 네이버 Geocoding/Directions 를 호출한다. 느리고
+  (무료 호스팅이라 콜드 스타트 수십 초) 짧은 시간에 몰아치면 502(`upstreamFailure`)가 난다.
+  타임아웃 기본값을 60초로 잡아 둔 이유다. 두 서비스 모두 결과를 캐싱한다.
+- 주차장 응답 필드는 **이름 · 위도 · 경도 셋뿐**이다. 요금 · 면수 · 운영시간은 오지 않아
+  `ParkingLot` 에도 없다. 위/경도는 숫자가 아니라 **문자열**로 온다.
+- 금지구역의 `path` 는 실제 도로 경로 좌표열이다. 서버는 Polygon 을 만들지 않으므로
+  지도에 그리려면 앱에서 폴리라인으로 그려야 한다. **좌표가 하나뿐인 구간도 있다**
+  (시작점과 종료점이 같게 해석된 경우).
+- 시간표의 `start`/`end` 는 하루에 구간이 여러 개면 `"08:00+11:30+18:00"` 처럼 `+` 로 이어진다.
+  `00:00~00:00` 은 "그 요일엔 규칙 없음"으로 취급한다(24시간 금지가 아니다).
+- **공휴일 판정은 서버만 정확하다.** 앱에는 공휴일 목록이 없어
+  `RestrictionSchedule.status(at:)` 는 일요일만 공휴일로 본다. 그래서
+  `EnforcementService` 는 조회 후 5분(`serverStatusLifetime`) 안에는 서버가 준
+  `serverStatus` 를 그대로 쓰고, 그 뒤부터 시간표로 다시 계산한다.
+- 단속 카메라 · 어린이 보호구역은 이 API 에 없다. 별도 소스가 필요하다.
 
 ## 참고 문서
 
