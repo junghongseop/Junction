@@ -307,27 +307,30 @@ struct MapHomeView: View {
         .buttonStyle(.plain)
     }
 
+    @ViewBuilder
     private var simulationSpeedBadge: some View {
-        VStack(spacing: 4) {
-            ZStack {
-                Circle()
-                    .fill(.white)
-                    .overlay(Circle().stroke(.red, lineWidth: 4))
-                Text(viewModel.simulatedSpeedLimitKPH.map(String.init) ?? "–")
-                    .font(.system(size: 19, weight: .heavy))
-                    .foregroundStyle(.black)
-            }
-            .frame(width: 56, height: 56)
+        if let speedLimit = viewModel.simulatedSpeedLimitKPH {
+            VStack(spacing: 4) {
+                ZStack {
+                    Circle()
+                        .fill(.white)
+                        .overlay(Circle().stroke(.red, lineWidth: 4))
+                    Text(speedLimit, format: .number)
+                        .font(.system(size: 19, weight: .heavy))
+                        .foregroundStyle(.black)
+                }
+                .frame(width: 56, height: 56)
 
-            Text("\(viewModel.simulatedSpeedKPH) km/h")
-                .font(.caption2.weight(.bold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 4)
-                .background(.black.opacity(0.65), in: .capsule)
+                Text("\(viewModel.simulatedSpeedKPH) km/h")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+                    .background(.black.opacity(0.65), in: .capsule)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Speed limit \(speedLimit), current speed \(viewModel.simulatedSpeedKPH) kilometers per hour")
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Speed \(viewModel.simulatedSpeedKPH) kilometers per hour")
     }
 
     private func locationStatus(_ message: String) -> some View {
