@@ -34,6 +34,11 @@ final class NaverMapController: ObservableObject {
     private var pendingCameraUpdate: (() -> Void)?
     private var routePath: NMFPath?
     private var endpointMarkers: [NMFMarker] = []
+    private var simulatedVehicleMarker: NMFMarker?
+    private var parkingRestrictionPaths: [NMFPath] = []
+    private var parkingRestrictionMarkers: [NMFMarker] = []
+    private var fadingRoutePath: NMFPath?
+    private var routeRevealTimer: Timer?
 
     // MARK: 명령
 
@@ -64,6 +69,188 @@ final class NaverMapController: ObservableObject {
                                                              lng: coordinate.longitude),
                                          zoomTo: zoom)
             update.animation = .easeIn
+            mapView.moveCamera(update)
+        }
+    }
+
+    /// 시뮬레이션 좌표에 차량 마커를 옮기고 카메라가 근거리에서 따라가게 한다.
+    func updateSimulatedVehicle(at coordinate: NaverCoordinate,
+                                bearing: Double,
+                                remainingPath: [NaverCoordinate],
+                                zoom: Double = 18.5) {
+        run {
+            guard let mapView = self.mapView else { return }
+            let position = NMGLatLng(lat: coordinate.latitude, lng: coordinate.longitude)
+            let marker: NMFMarker
+            if let existing = self.simulatedVehicleMarker {
+                marker = existing
+            } else {
+                marker = NMFMarker(position: position)
+                marker.iconImage = NMFOverlayImage(image: Self.simulatedVehicleImage)
+                marker.width = 52
+                marker.height = 52
+                marker.anchor = CGPoint(x: 0.5, y: 0.5)
+                marker.mapView = mapView
+                self.simulatedVehicleMarker = marker
+            }
+            marker.position = position
+            // 지도 카메라가 진행 방향으로 회전하므로 마커는 항상 화면 위를 향한다.
+            marker.angle = 0
+
+            if remainingPath.count >= 2 {
+                let points = remainingPath.map {
+                    NMGLatLng(lat: $0.latitude, lng: $0.longitude)
+                }
+                self.routePath?.path = NMGLineString(points: points)
+            }
+
+            let params = NMFCameraUpdateParams()
+            params.scroll(to: position)
+            params.zoom(to: zoom)
+            params.rotate(to: bearing)
+            let update = NMFCameraUpdate(params: params)
+            update.pivot = CGPoint(x: 0.5, y: 0.62)
+            update.animation = .none
+            mapView.moveCamera(update)
+        }
+    }
+
+    func removeSimulatedVehicle() {
+        simulatedVehicleMarker?.mapView = nil
+        simulatedVehicleMarker = nil
+    }
+
+    /// 도착지 주변 주정차 금지구역을 피그마 시안처럼 굵은 빨간 도로선으로 표시한다.
+    ///
+    /// 서버 응답의 `path` 가 한 점뿐인 구역은 선을 만들 수 없어서 같은 색의 점으로 대신한다.
+    func showParkingRestrictions(_ zones: [EnforcementZone]) {
+        run {
+            guard let mapView = self.mapView else { return }
+            self.removeParkingRestrictionOverlays()
+
+            for zone in zones {
+                let points = zone.path.map {
+                    NMGLatLng(lat: $0.latitude, lng: $0.longitude)
+                }
+
+                if points.count >= 2 {
+                    let path = NMFPath()
+                    path.path = NMGLineString(points: points)
+                    path.width = 8
+                    path.outlineWidth = 2
+                    path.color = UIColor(red: 1, green: 82 / 255, blue: 103 / 255, alpha: 0.9)
+                    path.outlineColor = UIColor(red: 134 / 255, green: 2 / 255, blue: 13 / 255, alpha: 0.95)
+                    path.zIndex = 50
+                    path.mapView = mapView
+                    self.parkingRestrictionPaths.append(path)
+                } else if let point = points.first {
+                    let marker = NMFMarker(position: point)
+                    marker.iconImage = NMFOverlayImage(image: Self.parkingRestrictionPointImage)
+                    marker.width = 18
+                    marker.height = 18
+                    marker.anchor = CGPoint(x: 0.5, y: 0.5)
+                    marker.zIndex = 50
+                    marker.mapView = mapView
+                    self.parkingRestrictionMarkers.append(marker)
+                }
+            }
+        }
+    }
+
+    func clearParkingRestrictions() {
+        run { self.removeParkingRestrictionOverlays() }
+    }
+
+    /// P 버튼으로 경로를 바꿀 때 기존 경로의 색상을 유지하고 새 경로를 순서대로 그리면서
+    /// 전체 경로가 화면에 들어오도록 카메라를 부드럽게 이동한다.
+    func showParkingRouteOverview(_ route: DrivingRoute) {
+        run {
+            guard let mapView = self.mapView, route.path.count >= 2 else { return }
+
+            self.routeRevealTimer?.invalidate()
+            self.routeRevealTimer = nil
+            self.fadingRoutePath?.mapView = nil
+
+            let previousPath = self.routePath
+            self.fadingRoutePath = previousPath
+
+            self.endpointMarkers.forEach { $0.mapView = nil }
+            self.endpointMarkers = []
+
+            let points = route.path.map {
+                NMGLatLng(lat: $0.latitude, lng: $0.longitude)
+            }
+            let routeColor = route.option == .comfortable
+                ? UIColor(red: 79 / 255, green: 121 / 255, blue: 1, alpha: 1)
+                : UIColor(red: 0, green: 230 / 255, blue: 118 / 255, alpha: 1)
+            let outlineColor = UIColor(red: 14 / 255, green: 31 / 255, blue: 67 / 255, alpha: 1)
+
+            let newPath = NMFPath()
+            newPath.path = NMGLineString(points: points)
+            newPath.width = 7
+            newPath.outlineWidth = 2
+            newPath.color = .clear
+            newPath.outlineColor = .clear
+            newPath.passedColor = routeColor
+            newPath.passedOutlineColor = outlineColor
+            newPath.progress = 0
+            newPath.mapView = mapView
+            self.routePath = newPath
+
+            let parkingMarker = NMFMarker(position: points[points.count - 1])
+            parkingMarker.iconImage = NMF_MARKER_IMAGE_BLUE
+            parkingMarker.captionText = "Parking"
+            parkingMarker.mapView = mapView
+            self.endpointMarkers = [parkingMarker]
+
+            let revealStartedAt = Date()
+            let revealDuration: TimeInterval = 0.8
+            let timer = Timer(timeInterval: 1 / 60, repeats: true) { [weak self, weak newPath] timer in
+                guard let self, let newPath else {
+                    timer.invalidate()
+                    return
+                }
+                let progress = min(1, Date().timeIntervalSince(revealStartedAt) / revealDuration)
+                newPath.progress = progress
+                guard progress >= 1 else { return }
+
+                timer.invalidate()
+                newPath.color = routeColor
+                newPath.outlineColor = outlineColor
+                newPath.progress = 0
+                self.fadingRoutePath?.mapView = nil
+                self.fadingRoutePath = nil
+                self.routeRevealTimer = nil
+            }
+            self.routeRevealTimer = timer
+            RunLoop.main.add(timer, forMode: .common)
+
+            let bounds = NMGLatLngBounds(latLngs: points)
+            let update = NMFCameraUpdate(
+                fit: bounds,
+                paddingInsets: UIEdgeInsets(top: 120, left: 40, bottom: 130, right: 40)
+            )
+            update.animation = .easeOut
+            update.animationDuration = 0.9
+            mapView.moveCamera(update)
+        }
+    }
+
+    /// 전체 경로 확인이 끝난 뒤 차량 위치로 플라이 줌인한다.
+    func focusOnNavigationVehicle(at coordinate: NaverCoordinate,
+                                  bearing: Double,
+                                  zoom: Double = 18.5,
+                                  duration: TimeInterval = 1.1) {
+        run {
+            guard let mapView = self.mapView else { return }
+            let params = NMFCameraUpdateParams()
+            params.scroll(to: NMGLatLng(lat: coordinate.latitude, lng: coordinate.longitude))
+            params.zoom(to: zoom)
+            params.rotate(to: bearing)
+            let update = NMFCameraUpdate(params: params)
+            update.pivot = CGPoint(x: 0.5, y: 0.62)
+            update.animation = .fly
+            update.animationDuration = duration
             mapView.moveCamera(update)
         }
     }
@@ -120,6 +307,7 @@ final class NaverMapController: ObservableObject {
     /// 지도 위의 경로 및 출발·도착 마커를 지운다.
     func clear() {
         removeRouteOverlays()
+        removeParkingRestrictionOverlays()
     }
 
     // MARK: 내부
@@ -150,11 +338,56 @@ final class NaverMapController: ObservableObject {
     }
 
     private func removeRouteOverlays() {
+        routeRevealTimer?.invalidate()
+        routeRevealTimer = nil
+        fadingRoutePath?.mapView = nil
+        fadingRoutePath = nil
         routePath?.mapView = nil
         routePath = nil
         endpointMarkers.forEach { $0.mapView = nil }
         endpointMarkers = []
     }
+
+    private func removeParkingRestrictionOverlays() {
+        parkingRestrictionPaths.forEach { $0.mapView = nil }
+        parkingRestrictionPaths = []
+        parkingRestrictionMarkers.forEach { $0.mapView = nil }
+        parkingRestrictionMarkers = []
+    }
+
+    private static let parkingRestrictionPointImage: UIImage = {
+        let size = CGSize(width: 18, height: 18)
+        return UIGraphicsImageRenderer(size: size).image { _ in
+            UIColor(red: 134 / 255, green: 2 / 255, blue: 13 / 255, alpha: 0.95).setFill()
+            UIBezierPath(ovalIn: CGRect(origin: .zero, size: size)).fill()
+            UIColor(red: 1, green: 132 / 255, blue: 118 / 255, alpha: 1).setFill()
+            UIBezierPath(ovalIn: CGRect(x: 3, y: 3, width: 12, height: 12)).fill()
+        }
+    }()
+
+    /// 외부 이미지 의존성 없이 그린 상단 시점 차량 아이콘.
+    private static let simulatedVehicleImage: UIImage = {
+        let size = CGSize(width: 52, height: 52)
+        return UIGraphicsImageRenderer(size: size).image { context in
+            let shadow = UIBezierPath(ovalIn: CGRect(x: 3, y: 3, width: 46, height: 46))
+            UIColor.black.withAlphaComponent(0.35).setFill()
+            context.cgContext.setShadow(offset: CGSize(width: 0, height: 3), blur: 4)
+            shadow.fill()
+            context.cgContext.setShadow(offset: .zero, blur: 0)
+
+            UIColor.white.setFill()
+            UIBezierPath(ovalIn: CGRect(x: 3, y: 2, width: 46, height: 46)).fill()
+
+            let arrow = UIBezierPath()
+            arrow.move(to: CGPoint(x: 26, y: 8))
+            arrow.addLine(to: CGPoint(x: 39, y: 39))
+            arrow.addLine(to: CGPoint(x: 26, y: 32))
+            arrow.addLine(to: CGPoint(x: 13, y: 39))
+            arrow.close()
+            UIColor(red: 0, green: 82 / 255, blue: 212 / 255, alpha: 1).setFill()
+            arrow.fill()
+        }
+    }()
 }
 
 // MARK: - SwiftUI View

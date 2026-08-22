@@ -12,8 +12,13 @@
 //
 //  쓰는 법
 //    recorder.start(route: route, destinationName: "경주")
-//    recorder.record(locationService.lastFix)   // 위치 갱신마다
-//    let recording = recorder.finish()          // 주행 종료
+//    recorder.record(sample)             // 좌표가 갱신될 때마다
+//    let recording = recorder.finish()   // 주행 종료
+//
+//  좌표 출처
+//    지금 주행 화면은 실제 GPS 가 아니라 `RouteLocationSimulator` 가 만든 좌표로 돈다.
+//    그래서 `MapHomeViewModel` 은 `record(_ sample:)` 쪽을 쓴다. 실제 GPS 로 갈아탈 때는
+//    `record(_ fix:)` 에 `locationService.lastFix` 를 넘기면 되고, 나머지는 그대로다.
 //
 
 import Foundation
@@ -28,6 +33,10 @@ protocol DriveRecorderProtocol: AnyObject {
 
     /// 위치 갱신 한 건을 넘긴다. 기록 중이 아니거나 `nil` 이면 무시한다.
     func record(_ fix: LocationFix?)
+
+    /// 이미 만들어진 샘플 한 건을 넘긴다. 좌표 출처가 실제 GPS 가 아닐 때 쓴다
+    /// (현재 주행 화면은 `RouteLocationSimulator` 가 좌표를 만든다).
+    func record(_ sample: DriveSample)
 
     /// 기록을 끝내고 결과를 돌려준다. 기록 중이 아니었으면 `nil`.
     @discardableResult
@@ -83,18 +92,23 @@ final class DriveRecorder: DriveRecorderProtocol {
     }
 
     func record(_ fix: LocationFix?) {
-        guard isRecording, let fix else { return }
+        guard let fix else { return }
+        record(DriveSample(fix: fix))
+    }
+
+    func record(_ sample: DriveSample) {
+        guard isRecording else { return }
         // 같은 갱신이 두 번 들어오는 경우.
-        guard fix.timestamp != lastRecordedTimestamp else { return }
+        guard sample.timestamp != lastRecordedTimestamp else { return }
 
         if let previous = samples.last {
-            let moved = previous.coordinate.distance(to: fix.coordinate)
-            let elapsed = fix.timestamp.timeIntervalSince(previous.timestamp)
+            let moved = previous.coordinate.distance(to: sample.coordinate)
+            let elapsed = sample.timestamp.timeIntervalSince(previous.timestamp)
             guard moved >= minimumSampleDistanceMeters || elapsed >= maximumSampleIntervalSeconds else { return }
         }
 
-        lastRecordedTimestamp = fix.timestamp
-        samples.append(DriveSample(fix: fix))
+        lastRecordedTimestamp = sample.timestamp
+        samples.append(sample)
     }
 
     @discardableResult

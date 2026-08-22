@@ -17,6 +17,8 @@ final class MapHomeViewModel: ObservableObject {
     /// 도 전체가 들어오는 정도의 축척. 현재 위치를 잡으면 `focusZoom` 으로 당긴다.
     private static let fallbackZoom: Double = 9
     private static let focusZoom: Double = 15
+    /// 이 거리 안에 들어오면 도착 임박 UI와 주정차 금지구역을 노출한다.
+    private static let destinationApproachDistanceMeters: Double = 300
 
     // MARK: 입력
 
@@ -35,8 +37,17 @@ final class MapHomeViewModel: ObservableObject {
     @Published private(set) var isRouteLoading = false
     @Published private(set) var routeErrorMessage: String?
     @Published private(set) var isDriving = false
+    @Published private(set) var simulationState: RouteSimulationState?
+    @Published private(set) var isApproachingDestination = false
+    @Published private(set) var parkingRestrictions: [EnforcementZone] = []
+    @Published private(set) var isParkingRestrictionsLoading = false
+    @Published private(set) var parkingRestrictionErrorMessage: String?
+    @Published private(set) var isParkingRouteLoading = false
+    @Published private(set) var isPreviewingParkingRoute = false
+    @Published private(set) var parkingRouteErrorMessage: String?
+    @Published private(set) var selectedParkingLot: ParkingLot?
     /// 방금 끝낸 주행. 값이 들어오면 화면이 Debrief 를 띄운다.
-    /// 주행을 기록하지 못했으면(위치 권한 없음 등) `nil` 로 남고 지금까지와 똑같이 동작한다.
+    /// 주행을 기록하지 못했으면(너무 짧은 주행 등) `nil` 로 남고 지금까지와 똑같이 동작한다.
     @Published private(set) var finishedDrive: DriveRecording?
 
     /// 지도 조작용.
@@ -53,20 +64,40 @@ final class MapHomeViewModel: ObservableObject {
 
     private let locationService: LocationServicing
     private let directionsService: NaverDirectionsServicing
-    /// 주행 종료 후 Debrief 를 만들 재료를 모은다. 위치 갱신은 아래 `handleLocationChange` 가 넘겨 준다.
+    private let routeSimulator: RouteLocationSimulating
+    private let speedLimitService: (any SpeedLimitServicing)?
+    private let parkingService: ParkingServicing
+    private let enforcementService: EnforcementServicing
+    /// 주행 종료 후 Debrief 를 만들 재료를 모은다.
+    /// 주행 좌표는 시뮬레이터가 만들므로 아래 `handleSimulationChange` 가 넘겨 준다.
     private let driveRecorder: DriveRecorderProtocol
     private var routeRequestID: UUID?
+    private var simulationStartID: UUID?
+    private var parkingRestrictionRequestID: UUID?
+    private var parkingRouteRequestID: UUID?
+    private var restrictionDestinationID: String?
     /// 첫 좌표에서 한 번만 카메라를 옮긴다. 이후에는 SDK 의 추적 모드가 맡는다.
     private var hasCenteredOnUser = false
 
     init(locationService: LocationServicing = LocationService(),
          directionsService: NaverDirectionsServicing = NaverDirectionsService(),
+         routeSimulator: RouteLocationSimulating = RouteLocationSimulator(),
+         speedLimitService: (any SpeedLimitServicing)? = try? SpeedLimitService(),
+         parkingService: ParkingServicing = ParkingService(),
+         enforcementService: EnforcementServicing = EnforcementService(),
          driveRecorder: DriveRecorderProtocol = DriveRecorder()) {
         self.locationService = locationService
         self.directionsService = directionsService
+        self.routeSimulator = routeSimulator
+        self.speedLimitService = speedLimitService
+        self.parkingService = parkingService
+        self.enforcementService = enforcementService
         self.driveRecorder = driveRecorder
         self.locationService.onChange = { [weak self] in
             self?.handleLocationChange()
+        }
+        self.routeSimulator.onChange = { [weak self] state in
+            self?.handleSimulationChange(state)
         }
         authorization = locationService.authorization
     }
@@ -96,7 +127,13 @@ final class MapHomeViewModel: ObservableObject {
     }
 
     func onDisappear() {
+        simulationStartID = nil
+        parkingRestrictionRequestID = nil
+        parkingRouteRequestID = nil
+        isPreviewingParkingRoute = false
         locationService.stopUpdating()
+        routeSimulator.stop()
+        routeMap.removeSimulatedVehicle()
     }
 
     /// 현위치 버튼(또는 권한 허용 직후) — 카메라를 사용자 위치로 되돌린다.
@@ -111,7 +148,13 @@ final class MapHomeViewModel: ObservableObject {
 
     /// 검색 화면에서 고른 목적지를 저장한다. 경로 요청은 미리보기 화면 진입 후 시작한다.
     func prepareDestination(_ location: NaverLocation) {
+        simulationStartID = nil
+        routeSimulator.stop()
+        routeMap.removeSimulatedVehicle()
         routeRequestID = nil
+        parkingRestrictionRequestID = nil
+        parkingRouteRequestID = nil
+        restrictionDestinationID = nil
         searchText = location.displayTitle
         destination = location
         route = nil
@@ -119,7 +162,17 @@ final class MapHomeViewModel: ObservableObject {
         routeErrorMessage = nil
         isRouteLoading = false
         isDriving = false
+        simulationState = nil
+        isApproachingDestination = false
+        parkingRestrictions = []
+        isParkingRestrictionsLoading = false
+        parkingRestrictionErrorMessage = nil
+        isParkingRouteLoading = false
+        isPreviewingParkingRoute = false
+        parkingRouteErrorMessage = nil
+        selectedParkingLot = nil
         selectedRouteOption = .fastest
+        routeMap.clearParkingRestrictions()
     }
 
     func retryRoute() async {
@@ -128,22 +181,49 @@ final class MapHomeViewModel: ObservableObject {
 
     /// 경로 화면에서 검색 화면으로 돌아갈 때 검색어·목적지는 유지하고 화면 작업만 멈춘다.
     func leaveRoutePreview() {
+        simulationStartID = nil
         routeRequestID = nil
+        parkingRestrictionRequestID = nil
+        parkingRouteRequestID = nil
+        restrictionDestinationID = nil
         isRouteLoading = false
         isDriving = false
+        simulationState = nil
+        isApproachingDestination = false
+        parkingRestrictions = []
+        isParkingRestrictionsLoading = false
+        isParkingRouteLoading = false
+        isPreviewingParkingRoute = false
+        routeSimulator.stop()
+        routeMap.removeSimulatedVehicle()
         // 끝까지 가지 않은 기록은 버린다. 남겨 두면 다음 주행에 섞인다.
         driveRecorder.cancel()
         routeMap.clear()
     }
 
     func clearDestination() {
+        simulationStartID = nil
         routeRequestID = nil
+        parkingRestrictionRequestID = nil
+        parkingRouteRequestID = nil
+        restrictionDestinationID = nil
         destination = nil
         route = nil
         safeRoute = nil
         routeErrorMessage = nil
         isRouteLoading = false
         isDriving = false
+        simulationState = nil
+        isApproachingDestination = false
+        parkingRestrictions = []
+        isParkingRestrictionsLoading = false
+        parkingRestrictionErrorMessage = nil
+        isParkingRouteLoading = false
+        isPreviewingParkingRoute = false
+        parkingRouteErrorMessage = nil
+        selectedParkingLot = nil
+        routeSimulator.stop()
+        routeMap.removeSimulatedVehicle()
         driveRecorder.cancel()
         searchText = ""
         routeMap.clear()
@@ -158,24 +238,142 @@ final class MapHomeViewModel: ObservableObject {
 
     func startDriving() {
         guard let selectedRoute else { return }
+        beginDriving(on: selectedRoute, departureDelay: 3)
+    }
+
+    /// P 버튼 — 현재 주행 좌표에서 가장 가까운 목적지 주변 주차장으로 안내를 바꾼다.
+    func navigateToNearestParking() async {
+        guard isDriving, !isParkingRouteLoading,
+              let destination,
+              let currentRoute = selectedRoute else { return }
+
+        let requestID = UUID()
+        parkingRouteRequestID = requestID
+        isParkingRouteLoading = true
+        parkingRouteErrorMessage = nil
+
+        let start = simulationState?.coordinate ?? currentRoute.goal
+
+        do {
+            let suggestions = try await parkingService.suggestions(
+                near: destination.coordinate,
+                radiusMeters: JunctionServerConfiguration.fixedSearchRadiusMeters
+            )
+            guard parkingRouteRequestID == requestID, isDriving else { return }
+
+            guard let nearest = suggestions.min(by: {
+                $0.lot.coordinate.distance(to: start) < $1.lot.coordinate.distance(to: start)
+            }) else {
+                throw JunctionServerError.httpStatus(code: 404, body: "주변 주차장을 찾지 못했습니다.")
+            }
+
+            let routes = try await directionsService.routes(
+                from: start,
+                to: nearest.lot.coordinate,
+                waypoints: [],
+                options: [.fastest, .comfortable]
+            )
+            guard parkingRouteRequestID == requestID, isDriving else { return }
+
+            guard let fastest = routes.first(where: { $0.option == .fastest }) ?? routes.first else {
+                throw NaverMapsError.emptyResult
+            }
+
+            route = fastest
+            safeRoute = routes.first { $0.option == .comfortable }
+            selectedRouteOption = fastest.option
+            selectedParkingLot = nearest.lot
+            isApproachingDestination = fastest.distance <= Int(Self.destinationApproachDistanceMeters)
+
+            // 기존 안내를 멈춘 뒤 새 경로를 전체 보기로 먼저 보여 준다.
+            simulationStartID = nil
+            routeSimulator.stop()
+            isPreviewingParkingRoute = true
+            routeMap.showParkingRouteOverview(fastest)
+
+            // 전체 경로 카메라 이동(0.9초) 뒤 약 1.2초간 경로를 읽을 시간을 준다.
+            try? await Task.sleep(nanoseconds: 2_100_000_000)
+            guard parkingRouteRequestID == requestID, isDriving else { return }
+
+            let routeStart = fastest.path.first ?? fastest.start
+            routeMap.focusOnNavigationVehicle(
+                at: routeStart,
+                bearing: Self.bearingOfFirstSegment(in: fastest)
+            )
+
+            // 차량 줌인 애니메이션이 끝난 다음 시뮬레이션을 재개해야 카메라가 튀지 않는다.
+            try? await Task.sleep(nanoseconds: 1_150_000_000)
+            guard parkingRouteRequestID == requestID, isDriving else { return }
+            isPreviewingParkingRoute = false
+            beginDriving(on: fastest, departureDelay: 0, preparesMap: false, startsRecording: false)
+        } catch {
+            guard parkingRouteRequestID == requestID else { return }
+            parkingRouteErrorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+
+        if parkingRouteRequestID == requestID {
+            isParkingRouteLoading = false
+        }
+    }
+
+    private func beginDriving(on route: DrivingRoute,
+                              departureDelay: TimeInterval,
+                              preparesMap: Bool = true,
+                              startsRecording: Bool = true) {
+        let startID = UUID()
+        simulationStartID = startID
         isDriving = true
-        finishedDrive = nil
-        driveRecorder.start(route: selectedRoute,
-                            originName: nil,
-                            destinationName: destination?.displayTitle)
-        routeMap.showRoute(selectedRoute, fitsRoute: false, showsEndpoints: false)
-        if let currentLocation = locationService.lastCoordinate {
-            routeMap.startNavigation(at: currentLocation)
-        } else {
-            routeMap.moveToCurrentLocation()
+        // 주차장으로 안내를 바꾸는 경우(`startsRecording == false`)는 같은 주행의 연장이다.
+        // 여기서 다시 `start` 하면 지금까지 모은 샘플을 통째로 버리게 된다.
+        if startsRecording {
+            finishedDrive = nil
+            driveRecorder.start(route: route,
+                                originName: nil,
+                                destinationName: destination?.displayTitle)
+        }
+        simulationState = nil
+        let startCoordinate = route.path.first ?? route.start
+        if preparesMap {
+            routeMap.showRoute(route, fitsRoute: false, showsEndpoints: false)
+            routeMap.updateSimulatedVehicle(
+                at: startCoordinate,
+                bearing: Self.bearingOfFirstSegment(in: route),
+                remainingPath: route.path
+            )
+        }
+        updateDestinationApproach(remainingDistance: Double(route.distance))
+        let departureDeadline = Date().addingTimeInterval(departureDelay)
+        Task {
+            var speedSegments: [RouteSpeedLimitSegment] = []
+            if let speedLimitService {
+                try? await speedLimitService.prepare(for: route)
+                speedSegments = speedLimitService.routeSegments
+            }
+            guard isDriving, simulationStartID == startID else { return }
+            let remainingDelay = departureDeadline.timeIntervalSinceNow
+            if remainingDelay > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(remainingDelay * 1_000_000_000))
+            }
+            guard isDriving, simulationStartID == startID else { return }
+            routeSimulator.start(route: route,
+                                 maximumSpeedKilometersPerHour: 100,
+                                 speedLimitSegments: speedSegments)
         }
     }
 
     func finishDriving() {
+        simulationStartID = nil
+        parkingRouteRequestID = nil
+        routeSimulator.stop()
+        routeMap.removeSimulatedVehicle()
+        simulationState = nil
+        isApproachingDestination = false
+        isParkingRouteLoading = false
+        isPreviewingParkingRoute = false
         isDriving = false
         if let selectedRoute { routeMap.showRoute(selectedRoute) }
 
-        // Debrief 는 여기서만 시작된다. 기록이 부실하면(권한 거부·너무 짧은 주행) 띄우지 않는다.
+        // Debrief 는 여기서만 시작된다. 기록이 부실하면(샘플 5개 미만·1분 미만) 띄우지 않는다.
         // 어느 쪽이든 위의 주행 종료 처리는 이미 끝나 있어서 기존 동작이 달라지지 않는다.
         let recording = driveRecorder.finish()
         finishedDrive = recording?.isSubstantial == true ? recording : nil
@@ -186,8 +384,25 @@ final class MapHomeViewModel: ObservableObject {
         finishedDrive = nil
     }
 
+    func dismissParkingRouteError() {
+        parkingRouteErrorMessage = nil
+    }
+
     var selectedRoute: DrivingRoute? {
         route(for: selectedRouteOption) ?? route
+    }
+
+    var currentInstruction: RouteStep? { simulationState?.nextStep }
+    var distanceToNextInstruction: Double { simulationState?.distanceToNextStep ?? 0 }
+    var remainingDistance: Double { simulationState?.remainingDistance ?? Double(selectedRoute?.distance ?? 0) }
+    var simulatedArrivalDate: Date {
+        Date().addingTimeInterval(simulationState?.remainingDuration ?? 0)
+    }
+    var simulatedSpeedKPH: Int { simulationState?.currentSpeedKPH ?? 0 }
+    var simulatedSpeedLimitKPH: Int? { simulationState?.speedLimitKPH }
+    var hasArrived: Bool { simulationState?.isFinished == true }
+    var canFinishDriving: Bool {
+        isDriving && isApproachingDestination
     }
 
     private func route(for option: RouteOption) -> DrivingRoute? {
@@ -208,13 +423,82 @@ final class MapHomeViewModel: ObservableObject {
         guard locationService.authorization == .authorized else { return }
         locationService.startUpdating()
 
-        // 주행 중이면 이 갱신을 기록에 남긴다.
-        // `LocationServicing.onChange` 는 구독자를 하나만 받아서, 이미 받고 있는 이쪽이
-        // 레코더에 넘겨 주는 구조다 (`DriveRecorder` 주석 참고).
-        driveRecorder.record(locationService.lastFix)
-
         guard !hasCenteredOnUser, let coordinate = locationService.lastCoordinate else { return }
         centerOnUser(coordinate)
+    }
+
+    private func handleSimulationChange(_ state: RouteSimulationState) {
+        simulationState = state
+        // 주행 좌표는 실제 GPS 가 아니라 시뮬레이터가 만든다(`RouteLocationSimulator`).
+        // Debrief 도 화면과 같은 좌표를 봐야 하므로 여기서 레코더에 넘긴다.
+        // 실제 GPS 로 갈아탈 때는 이 한 줄 대신 `handleLocationChange` 에서 `lastFix` 를 넘기면 된다.
+        driveRecorder.record(DriveSample(coordinate: state.coordinate,
+                                        timestamp: .now,
+                                        speedKPH: state.currentSpeedKPH,
+                                        courseDegrees: state.bearing))
+        updateDestinationApproach(remainingDistance: state.remainingDistance)
+        if let selectedRoute {
+            let nextIndex = min(state.pathIndex + 1, selectedRoute.path.count)
+            let remainingPath = [state.coordinate] + Array(selectedRoute.path.dropFirst(nextIndex))
+            routeMap.updateSimulatedVehicle(at: state.coordinate,
+                                            bearing: state.bearing,
+                                            remainingPath: remainingPath)
+        }
+    }
+
+    private func updateDestinationApproach(remainingDistance: Double) {
+        isApproachingDestination = isDriving
+            && remainingDistance <= Self.destinationApproachDistanceMeters
+
+        guard isApproachingDestination else { return }
+        loadParkingRestrictionsIfNeeded()
+    }
+
+    /// 도착 임박 구간에 처음 들어온 순간에만 백엔드를 호출한다.
+    private func loadParkingRestrictionsIfNeeded() {
+        guard let destination,
+              restrictionDestinationID != destination.id,
+              !isParkingRestrictionsLoading else { return }
+
+        let requestID = UUID()
+        parkingRestrictionRequestID = requestID
+        restrictionDestinationID = destination.id
+        isParkingRestrictionsLoading = true
+        parkingRestrictionErrorMessage = nil
+
+        Task {
+            do {
+                let zones = try await enforcementService.zones(
+                    near: destination.coordinate,
+                    radiusMeters: JunctionServerConfiguration.fixedSearchRadiusMeters
+                )
+                guard parkingRestrictionRequestID == requestID,
+                      self.destination?.id == destination.id else { return }
+                parkingRestrictions = zones
+                routeMap.showParkingRestrictions(zones)
+            } catch {
+                guard parkingRestrictionRequestID == requestID else { return }
+                parkingRestrictionErrorMessage = (error as? LocalizedError)?.errorDescription
+                    ?? error.localizedDescription
+            }
+
+            if parkingRestrictionRequestID == requestID {
+                isParkingRestrictionsLoading = false
+            }
+        }
+    }
+
+    private static func bearingOfFirstSegment(in route: DrivingRoute) -> Double {
+        guard route.path.count >= 2 else { return 0 }
+        let start = route.path[0]
+        let end = route.path[1]
+        let startLatitude = start.latitude * .pi / 180
+        let endLatitude = end.latitude * .pi / 180
+        let longitudeDelta = (end.longitude - start.longitude) * .pi / 180
+        let y = sin(longitudeDelta) * cos(endLatitude)
+        let x = cos(startLatitude) * sin(endLatitude)
+            - sin(startLatitude) * cos(endLatitude) * cos(longitudeDelta)
+        return (atan2(y, x) * 180 / .pi + 360).truncatingRemainder(dividingBy: 360)
     }
 
     private func loadRoute() async {
@@ -241,7 +525,16 @@ final class MapHomeViewModel: ObservableObject {
             guard routeRequestID == requestID, self.destination?.id == destination.id else { return }
             route = routes.first { $0.option == .fastest } ?? routes.first
             safeRoute = routes.first { $0.option == .comfortable }
-            if let route { routeMap.showRoute(route) }
+            if let route, route.usesTollRoad {
+                selectedRouteOption = route.option
+                routeMap.showRoute(route)
+            } else if let safeRoute {
+                selectedRouteOption = safeRoute.option
+                routeMap.showRoute(safeRoute)
+            } else if let route {
+                selectedRouteOption = route.option
+                routeMap.showRoute(route)
+            }
         } catch {
             guard routeRequestID == requestID, self.destination?.id == destination.id else { return }
             route = nil

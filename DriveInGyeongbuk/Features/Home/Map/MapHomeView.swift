@@ -136,14 +136,19 @@ struct MapHomeView: View {
     private var routePreview: some View {
         ZStack {
             NaverMapView(controller: viewModel.routeMap,
-                         positionMode: viewModel.isDriving ? .direction : .disabled,
-                         navigationZoom: viewModel.isDriving ? 18.5 : nil,
+                         positionMode: .disabled,
                          isNightMode: colorScheme == .dark,
                          logoMargin: UIEdgeInsets(top: 0, left: 12, bottom: 390, right: 0))
                 .ignoresSafeArea()
 
             if viewModel.isDriving {
-                drivingOverlay
+                if viewModel.isPreviewingParkingRoute {
+                    parkingRoutePreviewOverlay
+                        .transition(.opacity)
+                } else {
+                    drivingOverlay
+                        .transition(.opacity)
+                }
             } else {
                 VStack {
                     Spacer()
@@ -155,10 +160,20 @@ struct MapHomeView: View {
             }
         }
         .navigationTitle("")
+        .animation(.easeInOut(duration: 0.3), value: viewModel.isPreviewingParkingRoute)
         .navigationBarTitleDisplayMode(.inline)
         .toolbarVisibility(viewModel.isDriving ? .hidden : .visible, for: .navigationBar)
         .toolbarVisibility(.hidden, for: .tabBar)
         .toolbarBackground(.hidden, for: .navigationBar)
+        .alert("Unable to route to parking",
+               isPresented: Binding(
+                get: { viewModel.parkingRouteErrorMessage != nil },
+                set: { if !$0 { viewModel.dismissParkingRouteError() } }
+               )) {
+            Button("OK", role: .cancel) { viewModel.dismissParkingRouteError() }
+        } message: {
+            Text(viewModel.parkingRouteErrorMessage ?? "Please try again.")
+        }
         .task(id: viewModel.destination?.id) {
             guard viewModel.route == nil, !viewModel.isRouteLoading else { return }
             await viewModel.retryRoute()
@@ -201,6 +216,7 @@ struct MapHomeView: View {
 
             HStack(alignment: .bottom) {
                 VStack(spacing: 16) {
+                    simulationSpeedBadge
                     driveCircleButton(systemName: isVoiceGuidanceMuted ? "speaker.slash.fill" : "speaker.wave.2.fill") {
                         isVoiceGuidanceMuted.toggle()
                     }
@@ -222,13 +238,18 @@ struct MapHomeView: View {
 
                 Spacer()
 
-                Button("Finish", action: viewModel.finishDriving)
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(Color(red: 105 / 255, green: 0, blue: 5 / 255))
-                    .padding(.horizontal, 24)
-                    .frame(height: 48)
-                    .background(Color(red: 1, green: 180 / 255, blue: 171 / 255), in: .capsule)
+                if viewModel.canFinishDriving {
+                    VStack(spacing: 24) {
+                        if viewModel.selectedParkingLot == nil {
+                            parkingButton
+                        }
+                        finishButton
+                    }
+                    .frame(width: 120)
+                    .transition(.scale.combined(with: .opacity))
+                }
             }
+            .animation(.easeInOut(duration: 0.2), value: viewModel.canFinishDriving)
             .padding(.horizontal, 16)
             .padding(.bottom, 32)
 
@@ -239,8 +260,127 @@ struct MapHomeView: View {
         .ignoresSafeArea(edges: .bottom)
     }
 
+    private var parkingButton: some View {
+        Button {
+            Task { await viewModel.navigateToNearestParking() }
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(Color(red: 0, green: 82 / 255, blue: 212 / 255))
+                    .overlay(Circle().stroke(Color.white.opacity(0.3)))
+
+                if viewModel.isParkingRouteLoading {
+                    ProgressView()
+                        .controlSize(.large)
+                        .tint(.white)
+                } else {
+                    Text("P")
+                        .font(.system(size: 40, weight: .bold))
+                        .foregroundStyle(.white)
+                }
+            }
+            .frame(width: 100, height: 100)
+            .frame(width: 120, height: 120)
+        }
+        .buttonStyle(.plain)
+        .disabled(viewModel.isParkingRouteLoading || viewModel.selectedParkingLot != nil)
+        .accessibilityLabel(viewModel.isParkingRouteLoading
+                            ? "Finding the nearest parking lot"
+                            : "Route to the nearest parking lot")
+    }
+
+    private var finishButton: some View {
+        Button("Finish", action: viewModel.finishDriving)
+            .font(.system(size: 18, weight: .bold))
+            .foregroundStyle(Color(red: 105 / 255, green: 0, blue: 5 / 255))
+            .padding(.horizontal, 24)
+            .frame(height: 48)
+            .background(Color(red: 1, green: 180 / 255, blue: 171 / 255), in: .capsule)
+    }
+
+    @ViewBuilder
     private var maneuverCard: some View {
-        let step = viewModel.selectedRoute?.steps.first { $0.kind != .departure }
+        if let parkingLot = viewModel.selectedParkingLot {
+            VStack(spacing: 24) {
+                regularManeuverCard
+                parkingRecommendationBanner(name: parkingLot.englishDisplayName)
+            }
+        } else if viewModel.isApproachingDestination {
+            approachingDestinationHeader
+        } else {
+            regularManeuverCard
+        }
+    }
+
+    private var parkingRoutePreviewOverlay: some View {
+        VStack {
+            if let parkingLot = viewModel.selectedParkingLot {
+                parkingRecommendationBanner(name: parkingLot.englishDisplayName)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 20)
+            }
+            Spacer()
+        }
+        .ignoresSafeArea(edges: .bottom)
+    }
+
+    private func parkingRecommendationBanner(name: String) -> some View {
+        Text(name)
+            .font(.system(size: 20, weight: .bold))
+            .foregroundStyle(Color(red: 1, green: 247 / 255, blue: 246 / 255))
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .frame(height: 46)
+            .background(Color(red: 88 / 255, green: 88 / 255, blue: 88 / 255),
+                        in: RoundedRectangle(cornerRadius: 12))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(.black)
+            }
+            .accessibilityLabel("Recommended parking lot, \(name)")
+    }
+
+    private var approachingDestinationHeader: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Approaching destination")
+                .font(.system(size: 32, weight: .bold))
+                .foregroundStyle(Color(red: 218 / 255, green: 226 / 255, blue: 253 / 255))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(16)
+                .background(Color(red: 23 / 255, green: 35 / 255, blue: 64 / 255),
+                            in: RoundedRectangle(cornerRadius: 16))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(Color.white.opacity(0.1))
+                }
+
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 24, weight: .bold))
+                    .foregroundStyle(Color(red: 1, green: 180 / 255, blue: 171 / 255))
+
+                Text("No parking in red zones")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundStyle(Color(red: 1, green: 132 / 255, blue: 118 / 255))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 46)
+            .background(Color(red: 134 / 255, green: 2 / 255, blue: 13 / 255),
+                        in: RoundedRectangle(cornerRadius: 12))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color(red: 1, green: 132 / 255, blue: 118 / 255))
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityHint(viewModel.parkingRestrictionErrorMessage ?? "Red roads show no-parking zones.")
+    }
+
+    private var regularManeuverCard: some View {
+        let step = viewModel.currentInstruction
         return VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 16) {
                 Image(systemName: step?.kind.symbolName ?? "arrow.up")
@@ -249,16 +389,16 @@ struct MapHomeView: View {
                     .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 16))
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(step?.distanceDescription ?? "Start")
+                    Text(viewModel.hasArrived ? "0m" : simulationDistanceToInstruction)
                         .font(.system(size: 40, weight: .heavy))
-                    Text(step?.instructionTitle ?? "Follow the route")
+                    Text(viewModel.hasArrived ? "Arrived" : (step?.instructionTitle ?? "Follow the route"))
                         .font(.system(size: 22, weight: .bold))
                         .foregroundStyle(Color(red: 201 / 255, green: 212 / 255, blue: 1))
                         .lineLimit(1)
                 }
             }
 
-            Text(step?.roadName ?? "Route guidance")
+            Text(viewModel.hasArrived ? "Destination reached" : (step?.roadName ?? "Route guidance"))
                 .font(.system(size: 32, weight: .bold))
                 .lineLimit(1)
         }
@@ -276,9 +416,9 @@ struct MapHomeView: View {
                 .font(.system(size: 30, weight: .bold))
             Text("ETA").font(.system(size: 18, weight: .medium))
             Spacer()
-            Text(viewModel.selectedRoute?.distanceValue ?? "–")
+            Text(simulationRemainingDistance.value)
                 .font(.system(size: 30, weight: .bold))
-            Text(viewModel.selectedRoute?.distanceUnit ?? "km")
+            Text(simulationRemainingDistance.unit)
                 .font(.system(size: 18, weight: .medium))
         }
         .foregroundStyle(Color(red: 179 / 255, green: 197 / 255, blue: 1))
@@ -290,7 +430,22 @@ struct MapHomeView: View {
     }
 
     private var estimatedArrival: Date {
-        Date().addingTimeInterval(TimeInterval(viewModel.selectedRoute?.duration ?? 0))
+        viewModel.simulatedArrivalDate
+    }
+
+    private var simulationDistanceToInstruction: String {
+        formattedDistance(viewModel.distanceToNextInstruction).value
+            + formattedDistance(viewModel.distanceToNextInstruction).unit
+    }
+
+    private var simulationRemainingDistance: (value: String, unit: String) {
+        formattedDistance(viewModel.remainingDistance)
+    }
+
+    private func formattedDistance(_ distance: Double) -> (value: String, unit: String) {
+        distance >= 1000
+            ? (String(format: "%.1f", distance / 1000), "km")
+            : (String(Int(max(0, distance).rounded())), "m")
     }
 
     private func driveCircleButton(systemName: String, action: @escaping () -> Void) -> some View {
@@ -302,6 +457,34 @@ struct MapHomeView: View {
                 .overlay(Circle().stroke(Color.white.opacity(0.2)))
         }
         .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var simulationSpeedBadge: some View {
+        if let speedLimit = viewModel.simulatedSpeedLimitKPH {
+            VStack(spacing: 4) {
+                ZStack {
+                    Circle()
+                        .fill(.white)
+                        .overlay(Circle().stroke(.red, lineWidth: 4))
+                    Text(speedLimit, format: .number)
+                        .font(.system(size: 19, weight: .heavy))
+                        .foregroundStyle(.black)
+                }
+                .frame(width: 56, height: 56)
+
+                Text("\(viewModel.hasArrived ? 0 : viewModel.simulatedSpeedKPH) km/h")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+                    .background(.black.opacity(0.65), in: .capsule)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(
+                "Speed limit \(speedLimit), current speed \(viewModel.hasArrived ? 0 : viewModel.simulatedSpeedKPH) kilometers per hour"
+            )
+        }
     }
 
     private func locationStatus(_ message: String) -> some View {
@@ -346,7 +529,7 @@ private extension RouteStep {
         case .uTurn: return "Make a U-turn"
         case .keepLeft: return "Keep left"
         case .keepRight: return "Keep right"
-        case .tollGate: return "Use the Hi-Pass lane"
+        case .tollGate: return "Toll gate ahead"
         case .highwayEntrance: return "Enter the highway"
         case .highwayExit: return "Take the exit"
         case .roundabout: return "Enter the roundabout"
