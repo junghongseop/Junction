@@ -10,6 +10,7 @@ import SwiftUI
 struct HomeView: View {
 
     @State private var isShowingNaverMapsTest = false
+    @State private var isShowingSpeedLimitTest = false
 
     var body: some View {
         VStack(spacing: 24) {
@@ -27,17 +28,30 @@ struct HomeView: View {
             }
 
             // 제품 UI 는 아직 없다. 서비스 계층 검증용 화면으로만 연결해 둔다.
-            Button {
-                isShowingNaverMapsTest = true
-            } label: {
-                Label("NaverMaps 서비스 테스트", systemImage: "map")
-                    .frame(maxWidth: .infinity)
+            VStack(spacing: 12) {
+                Button {
+                    isShowingNaverMapsTest = true
+                } label: {
+                    Label("NaverMaps 서비스 테스트", systemImage: "map")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button {
+                    isShowingSpeedLimitTest = true
+                } label: {
+                    Label("SpeedLimit 서비스 테스트", systemImage: "gauge.with.needle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
             }
-            .buttonStyle(.borderedProminent)
         }
         .padding(24)
         .fullScreenCover(isPresented: $isShowingNaverMapsTest) {
             NaverMapsTestView(onClose: { isShowingNaverMapsTest = false })
+        }
+        .fullScreenCover(isPresented: $isShowingSpeedLimitTest) {
+            SpeedLimitTestView(onClose: { isShowingSpeedLimitTest = false })
         }
     }
 }

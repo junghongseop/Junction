@@ -22,7 +22,10 @@ import CoreLocation
 ///
 /// 네이버 Maps API 는 좌표를 항상 `경도,위도`(x,y) 순서로 주고받는다.
 /// 실수를 막기 위해 문자열 변환은 `apiQueryValue` 로만 하도록 한다.
-struct NaverCoordinate: Codable, Hashable, Identifiable {
+///
+/// 이 프로젝트는 기본 액터 격리가 MainActor 라서 아무 표시가 없으면 MainActor 에 묶인다.
+/// 좌표는 값 타입이고 제한속도 매칭처럼 백그라운드에서 대량으로 다뤄야 하므로 격리에서 빼 둔다.
+nonisolated struct NaverCoordinate: Codable, Hashable, Identifiable {
     var latitude: Double
     var longitude: Double
 
@@ -69,7 +72,7 @@ struct NaverCoordinate: Codable, Hashable, Identifiable {
 }
 
 /// 남서/북동 좌표로 표현한 사각 영역.
-struct NaverCoordinateBounds: Codable, Hashable {
+nonisolated struct NaverCoordinateBounds: Codable, Hashable {
     var southWest: NaverCoordinate
     var northEast: NaverCoordinate
 

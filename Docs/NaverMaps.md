@@ -41,7 +41,12 @@ Services/
 │   ├── NaverMapDTO.swift            설정 · 에러 · 전송 계층 · 응답 DTO · 도메인 모델
 │   ├── NaverGeocodingService.swift  주소 ↔ 좌표
 │   └── NaverDirectionsService.swift 자동차 경로 탐색
-├── SpeedLimit/         ⬜ 껍데기 (제한속도 안내)
+├── SpeedLimit/         ✅ 구현 완료 (번들 SQLite 기반 제한속도 안내 · 오프라인)
+│   ├── KoreaCoordinateConverter.swift  WGS84 ↔ EPSG:5179 변환
+│   ├── SpeedLimitLink.swift            도메인 모델 (링크 · 매칭 · 도로등급)
+│   ├── SpeedLimitGeometry.swift        GSL1 형상 파서 · 폴리라인 계산 · 공간 인덱스
+│   ├── SpeedLimitDataSource.swift      번들 SQLite 조회 (R-tree)
+│   └── SpeedLimitService.swift         경로 구간 분할 · 초과 경고 / 감속 예고
 ├── RoadSign/           ⬜ 껍데기 (한국어 표지판 인식 · 외국어 해설)
 ├── TollGate/           ⬜ 껍데기 (톨게이트 차로 안내)
 ├── Parking/            ⬜ 껍데기 (도착지 인근 주차장)
@@ -52,7 +57,7 @@ Services/
 
 | 소비자 | 쓰는 값 |
 | --- | --- |
-| `SpeedLimitService` | `route.sections` (도로명 · 좌표 구간) |
+| `SpeedLimitService` | `route.path` (경로 폴리라인 — 표준노드링크에 좌표로 스냅) |
 | `RoadSignExplanationService` | `route.steps[].instructions` (한국어 안내 원문) |
 | `TollGateService` | `route.tollGateSteps` |
 | `ParkingService` / `EnforcementService` | `route.goal` |
@@ -63,7 +68,9 @@ Services/
   `NaverCoordinate.apiQueryValue` 로만 하세요.
 - Directions 5 는 소요 시간을 **밀리초**로 줍니다. `DrivingRoute.duration` 은 초로 변환해 둡니다.
 - `RouteSection.currentSpeed` 는 **현재 통행 속도**이지 제한속도가 아닙니다.
-  제한속도는 `Services/SpeedLimit` 에서 별도 데이터로 채워야 합니다.
+  제한속도는 `Services/SpeedLimit` 이 번들 데이터셋에서 따로 가져옵니다.
+- `NaverCoordinate` / `NaverCoordinateBounds` 는 `nonisolated` 입니다. 제한속도 매칭처럼
+  백그라운드에서 대량으로 다뤄야 해서 MainActor 격리에서 빼 두었습니다.
 - 안내 코드(`RouteStep.rawType`)는 공개 문서 개정이 잦아 값만으로 단정하지 않고,
   `RouteGuideKind.classify(instructions:)` 가 한국어 안내 문구로 분류합니다.
   원본 코드는 `rawType` 에 그대로 남아 있습니다.
@@ -81,6 +88,13 @@ Services/
 - 탐색 옵션을 골라 경로 탐색 → 폴리라인, 거리/시간/통행료 요약
 - 턴바이턴 안내 목록(원본 `type` 코드와 분류 결과 포함), 행을 누르면 지도 이동
 - 도로 구간 목록(도로명 · 현재 속도 · 혼잡도)
+
+홈 화면의 **SpeedLimit 서비스 테스트** 버튼은 제한속도 쪽 검증 화면입니다.
+
+- 좌표(또는 지도 탭) → 주변 링크 목록 · 가장 가까운 도로와 제한속도
+  → **번들 DB 만 쓰므로 API 키 없이도 확인됩니다**
+- 경로 탐색 → 제한속도가 같은 구간으로 쪼갠 목록 (REST 키 필요)
+- 진행률·속도 슬라이더로 주행 시뮬레이션 → 초과 경고 / 감속 예고 확인
 
 제품 UI 가 아니라 서비스 계층 검증용이라 디자인은 최소한만 했습니다.
 
