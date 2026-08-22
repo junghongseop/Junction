@@ -197,10 +197,10 @@ struct DebriefView: View {
     /// 억지로 카드를 만들지 않고 그렇다고 말한다.
     private var nothingToReport: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Nothing stood out today.")
+            Text(viewModel.nothingToReportTitle)
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(DebriefStyle.primaryText)
-            Text("No speed-limit surprises, toll gates or restricted stops came up on this route.")
+            Text(viewModel.nothingToReportMessage)
                 .font(.system(size: 15))
                 .foregroundStyle(DebriefStyle.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
