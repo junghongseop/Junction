@@ -38,8 +38,10 @@ struct RouteSummaryCard: View {
             }
 
             HStack(spacing: 11) {
-                metricCard(title: route.usesTollRoad ? "Hi-Pass" : "Fastest",
-                           route: route)
+                if route.usesTollRoad {
+                    metricCard(title: "Hi-Pass",
+                               route: route)
+                }
                 metricCard(title: "Safe Path",
                            route: safeRoute ?? route)
             }

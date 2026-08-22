@@ -225,6 +225,7 @@ final class MapHomeViewModel: ObservableObject {
     }
     var simulatedSpeedKPH: Int { simulationState?.currentSpeedKPH ?? 0 }
     var simulatedSpeedLimitKPH: Int? { simulationState?.speedLimitKPH }
+    var hasArrived: Bool { simulationState?.isFinished == true }
 
     private func route(for option: RouteOption) -> DrivingRoute? {
         switch option {
@@ -257,7 +258,6 @@ final class MapHomeViewModel: ObservableObject {
                                             bearing: state.bearing,
                                             remainingPath: remainingPath)
         }
-        if state.isFinished { finishDriving() }
     }
 
     private static func bearingOfFirstSegment(in route: DrivingRoute) -> Double {
@@ -297,7 +297,16 @@ final class MapHomeViewModel: ObservableObject {
             guard routeRequestID == requestID, self.destination?.id == destination.id else { return }
             route = routes.first { $0.option == .fastest } ?? routes.first
             safeRoute = routes.first { $0.option == .comfortable }
-            if let route { routeMap.showRoute(route) }
+            if let route, route.usesTollRoad {
+                selectedRouteOption = route.option
+                routeMap.showRoute(route)
+            } else if let safeRoute {
+                selectedRouteOption = safeRoute.option
+                routeMap.showRoute(safeRoute)
+            } else if let route {
+                selectedRouteOption = route.option
+                routeMap.showRoute(route)
+            }
         } catch {
             guard routeRequestID == requestID, self.destination?.id == destination.id else { return }
             route = nil

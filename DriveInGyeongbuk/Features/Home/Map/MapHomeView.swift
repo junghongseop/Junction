@@ -237,16 +237,16 @@ struct MapHomeView: View {
                     .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 16))
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(simulationDistanceToInstruction)
+                    Text(viewModel.hasArrived ? "0m" : simulationDistanceToInstruction)
                         .font(.system(size: 40, weight: .heavy))
-                    Text(step?.instructionTitle ?? "Follow the route")
+                    Text(viewModel.hasArrived ? "Arrived" : (step?.instructionTitle ?? "Follow the route"))
                         .font(.system(size: 22, weight: .bold))
                         .foregroundStyle(Color(red: 201 / 255, green: 212 / 255, blue: 1))
                         .lineLimit(1)
                 }
             }
 
-            Text(step?.roadName ?? "Route guidance")
+            Text(viewModel.hasArrived ? "Destination reached" : (step?.roadName ?? "Route guidance"))
                 .font(.system(size: 32, weight: .bold))
                 .lineLimit(1)
         }
@@ -309,7 +309,15 @@ struct MapHomeView: View {
 
     @ViewBuilder
     private var simulationSpeedBadge: some View {
-        if let speedLimit = viewModel.simulatedSpeedLimitKPH {
+        if viewModel.hasArrived {
+            Text("0 km/h")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.black.opacity(0.7), in: .capsule)
+                .accessibilityLabel("Stopped, zero kilometers per hour")
+        } else if let speedLimit = viewModel.simulatedSpeedLimitKPH {
             VStack(spacing: 4) {
                 ZStack {
                     Circle()

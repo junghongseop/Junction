@@ -276,10 +276,18 @@ final class RouteLocationSimulator: RouteLocationSimulating {
     }
 
     private func chooseNextCruiseBehavior(at date: Date) {
-        cruiseFactor = Double.random(in: 0.82...0.99)
+        // 대체로 제한속도 아래에서 달리되, 가끔은 짧게 2~7% 정도 더 밟는다.
+        // 목표값만 바꾸므로 실제 속도는 아래 가속률을 따라 서서히 접근한다.
+        if Double.random(in: 0...1) < 0.22 {
+            cruiseFactor = Double.random(in: 1.02...1.07)
+        } else if Bool.random() {
+            cruiseFactor = min(0.99, cruiseFactor + Double.random(in: 0.04...0.12))
+        } else {
+            cruiseFactor = max(0.78, cruiseFactor - Double.random(in: 0.03...0.10))
+        }
         accelerationKPHPerSecond = Double.random(in: 5.5...9.0)
         decelerationKPHPerSecond = Double.random(in: 4.0...8.0)
-        nextCruiseAdjustment = date.addingTimeInterval(Double.random(in: 2.5...6.0))
+        nextCruiseAdjustment = date.addingTimeInterval(Double.random(in: 3.5...7.0))
     }
 
     private func updateBearing(delta: TimeInterval) {
@@ -289,8 +297,12 @@ final class RouteLocationSimulator: RouteLocationSimulating {
             return
         }
         let shortestDifference = (target - current + 540).truncatingRemainder(dividingBy: 360) - 180
-        let smoothing = 1 - exp(-3.2 * delta)
-        smoothedBearing = (current + shortestDifference * smoothing + 360)
+        let smoothing = 1 - exp(-1.35 * delta)
+        let desiredChange = shortestDifference * smoothing
+        // 급커브에서도 지도가 한 번에 휙 돌지 않도록 회전 속도를 제한한다.
+        let maximumChange = 32 * delta
+        let appliedChange = min(max(desiredChange, -maximumChange), maximumChange)
+        smoothedBearing = (current + appliedChange + 360)
             .truncatingRemainder(dividingBy: 360)
     }
 
@@ -298,7 +310,7 @@ final class RouteLocationSimulator: RouteLocationSimulating {
         guard cumulativeDistances.count >= 2 else { return 0 }
         let current = coordinate(at: traveledDistance).coordinate
         // 속도가 빠를수록 더 멀리 내다봐 작은 경로 꺾임에 카메라가 흔들리지 않게 한다.
-        let lookAhead = min(70, max(18, simulatedSpeedKPH / 3.6 * 1.5))
+        let lookAhead = min(110, max(35, simulatedSpeedKPH / 3.6 * 2.2))
         let ahead = coordinate(at: traveledDistance + lookAhead).coordinate
         guard current.distance(to: ahead) > 0.5 else { return smoothedBearing ?? 0 }
         return Self.bearing(from: current, to: ahead)
