@@ -344,8 +344,25 @@ private extension RouteStep {
     }
 
     var roadName: String {
-        let trimmed = instructions.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "Route guidance" : trimmed
+        guard let destinationName = quotedDestinationName else {
+            return kind == .destination ? "Destination ahead" : "Toward the next road"
+        }
+        let romanized = destinationName
+            .applyingTransform(.toLatin, reverse: false)?
+            .applyingTransform(.stripDiacritics, reverse: false)
+            ?? destinationName
+        return "Toward \(romanized)"
+    }
+
+    private var quotedDestinationName: String? {
+        for quote in ["'", "\""] {
+            let parts = instructions.split(separator: Character(quote), omittingEmptySubsequences: false)
+            if parts.count >= 3 {
+                let name = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !name.isEmpty { return name }
+            }
+        }
+        return nil
     }
 }
 
