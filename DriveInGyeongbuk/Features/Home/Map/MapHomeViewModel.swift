@@ -71,6 +71,18 @@ final class MapHomeViewModel: ObservableObject {
     /// 주행 종료 후 Debrief 를 만들 재료를 모은다.
     /// 주행 좌표는 시뮬레이터가 만들므로 아래 `handleSimulationChange` 가 넘겨 준다.
     private let driveRecorder: DriveRecorderProtocol
+
+    /// 주행 기록을 Debrief 로 바꾸는 서비스.
+    ///
+    /// 화면이 `DebriefService()` 를 직접 만들지 않고 여기서 넘겨 주는 이유:
+    /// 주행 중에 이미 열어 둔 제한속도 DB(34MB SQLite)와, 도착 임박에 이미 받아 둔
+    /// 주정차 금지구간을 **그대로 재사용**하기 위해서다. 새로 만들면 주행이 끝난 화면에서
+    /// 같은 것을 처음부터 다시 하느라 로딩만 길어진다(무료 호스팅은 콜드 스타트가 수십 초다).
+    private(set) lazy var debriefService: DebriefServicing = DebriefService(
+        enforcementService: enforcementService,
+        speedLimitServiceFactory: { [weak self] in self?.speedLimitService }
+    )
+
     private var routeRequestID: UUID?
     private var simulationStartID: UUID?
     private var parkingRestrictionRequestID: UUID?
@@ -127,6 +139,14 @@ final class MapHomeViewModel: ObservableObject {
     }
 
     func onDisappear() {
+        // 주행 중이면 아무것도 멈추지 않는다.
+        //
+        // Map 탭을 벗어나기만 해도 여기까지 온다. 예전에는 그때 시뮬레이터를 멈춰 버려서,
+        // Trip 탭을 한 번 눌렀다 돌아오면 안내 화면은 그대로인데 차만 멈춰 있었다.
+        // 되살릴 방법도 없었다 — `onAppear` 는 주행을 다시 시작하지 않는다.
+        // 주행은 화면을 잠깐 벗어난다고 끝나는 일이 아니다.
+        guard !isDriving else { return }
+
         simulationStartID = nil
         parkingRestrictionRequestID = nil
         parkingRouteRequestID = nil
@@ -373,10 +393,16 @@ final class MapHomeViewModel: ObservableObject {
         isDriving = false
         if let selectedRoute { routeMap.showRoute(selectedRoute) }
 
-        // Debrief 는 여기서만 시작된다. 기록이 부실하면(샘플 5개 미만·1분 미만) 띄우지 않는다.
-        // 어느 쪽이든 위의 주행 종료 처리는 이미 끝나 있어서 기존 동작이 달라지지 않는다.
-        let recording = driveRecorder.finish()
-        finishedDrive = recording?.isSubstantial == true ? recording : nil
+        // Debrief 는 여기서만 시작된다.
+        //
+        // 기록이 짧다는 이유로 걸러 내지 않는다. 사용자가 Finish 를 눌렀다는 건
+        // "여기까지의 주행에 대해 말해 달라"는 뜻이고, 아무 화면도 안 띄우면
+        // 버튼이 고장 난 것처럼 보인다(실제로 그렇게 보였다). 감지할 게 없는 주행이면
+        // Debrief 가 "이번엔 특별한 게 없었다"고 말해 준다 — 그쪽이 정직하다.
+        //
+        // 짧은 주행이라는 사실 자체는 `DriveRecording.isSubstantial` 로 화면이 판단해
+        // 빈 상태 문구를 바꾼다.
+        finishedDrive = driveRecorder.finish()
     }
 
     /// Debrief 를 닫는다.
@@ -401,8 +427,16 @@ final class MapHomeViewModel: ObservableObject {
     var simulatedSpeedKPH: Int { simulationState?.currentSpeedKPH ?? 0 }
     var simulatedSpeedLimitKPH: Int? { simulationState?.speedLimitKPH }
     var hasArrived: Bool { simulationState?.isFinished == true }
-    var canFinishDriving: Bool {
-        isDriving && isApproachingDestination
+
+    /// 주행 종료 버튼을 보여 줄지.
+    ///
+    /// 주행 중에는 **항상** 보여 준다. 도착 임박일 때만 띄웠더니, 주행 화면은
+    /// 네비게이션 바를 숨기기 때문에 중간에 그만두려면 나갈 길이 없었다.
+    var canFinishDriving: Bool { isDriving }
+
+    /// 주차장 안내(P) 버튼을 보여 줄지. 이쪽은 도착 임박일 때만 의미가 있다.
+    var canSuggestParking: Bool {
+        isDriving && isApproachingDestination && selectedParkingLot == nil
     }
 
     private func route(for option: RouteOption) -> DrivingRoute? {

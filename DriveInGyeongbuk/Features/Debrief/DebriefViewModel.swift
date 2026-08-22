@@ -91,4 +91,25 @@ final class DebriefViewModel: ObservableObject {
     var hasNothingToReport: Bool {
         debrief != nil && lessons.isEmpty
     }
+
+    /// 빈 상태 제목.
+    var nothingToReportTitle: String {
+        isShortDrive ? "Too short to say much." : "Nothing stood out today."
+    }
+
+    /// 빈 상태 본문.
+    ///
+    /// 짧은 주행에 "특별한 게 없었다"고 말하면 거짓말이 된다 — 판정할 거리가 없었을 뿐이다.
+    /// 사건이 왜 없는지를 있는 그대로 나눠 말한다.
+    var nothingToReportMessage: String {
+        isShortDrive
+            ? "You ended this drive before there was enough of it to look back on. Drive a little longer and the debrief will have more to work with."
+            : "No speed-limit surprises, toll gates or restricted stops came up on this route."
+    }
+
+    /// 사건 판정에 쓸 만한 길이였는지. 아니면 빈 상태 문구를 바꾼다.
+    private var isShortDrive: Bool {
+        guard let recording = debrief?.recording ?? recording else { return false }
+        return !recording.isSubstantial
+    }
 }

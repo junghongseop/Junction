@@ -56,7 +56,9 @@ struct MapHomeView: View {
         // `navigationPath` 대신 별도 표현으로 띄우는 이유: 아래 `onChange(of: navigationPath)` 가
         // 경로가 비면 목적지를 지우게 되어 있어서, 여기에 화면을 하나 더 밀어 넣으면 서로 싸운다.
         .fullScreenCover(item: finishedDriveBinding) { recording in
-            DebriefView(recording: recording) { viewModel.dismissDebrief() }
+            DebriefView(recording: recording,
+                        service: viewModel.debriefService,
+                        onClose: closeDebrief)
         }
         .onChange(of: navigationPath) { _, newPath in
             guard viewModel.destination != nil else { return }
@@ -74,7 +76,20 @@ struct MapHomeView: View {
     /// `@Published private(set)` 은 그대로 바인딩할 수 없어서 읽기/닫기만 이어 준다.
     private var finishedDriveBinding: Binding<DriveRecording?> {
         Binding(get: { viewModel.finishedDrive },
-                set: { if $0 == nil { viewModel.dismissDebrief() } })
+                set: { if $0 == nil { closeDebrief() } })
+    }
+
+    /// Debrief 를 닫는다 — 끝난 주행이니 홈까지 되돌린다.
+    ///
+    /// 되돌리는 걸 Finish 를 누를 때가 아니라 **닫을 때** 하는 이유: 같은 갱신에서
+    /// 모달을 띄우면서 그 아래 스택을 접으면 표현이 통째로 유실되는 일이 있다.
+    /// Debrief 를 못 띄우는 건 이 화면에서 제일 나쁜 실패라, 띄우는 쪽에는 아무것도 겹치지 않는다.
+    ///
+    /// 스택이 비면 `onChange(of: navigationPath)` 가 `clearDestination()` 을 부른다.
+    /// 목적지·경로·주차장 선택이 거기서 한꺼번에 정리된다.
+    private func closeDebrief() {
+        viewModel.dismissDebrief()
+        navigationPath.removeAll()
     }
 
     private var homeMap: some View {
@@ -238,18 +253,19 @@ struct MapHomeView: View {
 
                 Spacer()
 
-                if viewModel.canFinishDriving {
-                    VStack(spacing: 24) {
-                        if viewModel.selectedParkingLot == nil {
-                            parkingButton
-                        }
+                // Finish 는 주행 내내 자리를 지킨다. 도착 임박에 P 버튼이 그 위로 끼어든다.
+                VStack(spacing: 24) {
+                    if viewModel.canSuggestParking {
+                        parkingButton
+                            .transition(.scale.combined(with: .opacity))
+                    }
+                    if viewModel.canFinishDriving {
                         finishButton
                     }
-                    .frame(width: 120)
-                    .transition(.scale.combined(with: .opacity))
                 }
+                .frame(width: 120)
             }
-            .animation(.easeInOut(duration: 0.2), value: viewModel.canFinishDriving)
+            .animation(.easeInOut(duration: 0.2), value: viewModel.canSuggestParking)
             .padding(.horizontal, 16)
             .padding(.bottom, 32)
 

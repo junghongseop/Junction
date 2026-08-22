@@ -97,8 +97,16 @@ final class DebriefService: DebriefServicing {
         var warnings: [String] = []
 
         // ① 공공데이터. 둘 다 실패해도 계속 간다.
-        let segments = await loadSpeedLimitSegments(for: recording, warnings: &warnings)
-        let zones = await loadEnforcementZones(for: recording, warnings: &warnings)
+        //
+        // 한쪽은 네트워크(콜드 스타트 수십 초), 다른 쪽은 SQLite 다. 줄 세울 이유가 없어
+        // 같이 띄운다 — 주행이 끝난 화면에서 기다리는 시간이 그만큼 줄어든다.
+        async let loadedSegments = loadSpeedLimitSegments(for: recording)
+        async let loadedZones = loadEnforcementZones(for: recording)
+
+        let (segments, segmentWarnings) = await loadedSegments
+        let (zones, zoneWarnings) = await loadedZones
+        warnings.append(contentsOf: segmentWarnings)
+        warnings.append(contentsOf: zoneWarnings)
 
         let context = DriveEventContext(
             recording: recording,
@@ -172,39 +180,40 @@ final class DebriefService: DebriefServicing {
 
     // MARK: - 공공데이터
 
-    private func loadSpeedLimitSegments(for recording: DriveRecording,
-                                        warnings: inout [String]) async -> [RouteSpeedLimitSegment] {
+    /// 실패 사유는 던지지 않고 `warnings` 로 함께 돌려준다. 이 단계는 멈출 이유가 아니다.
+    private func loadSpeedLimitSegments(
+        for recording: DriveRecording
+    ) async -> (segments: [RouteSpeedLimitSegment], warnings: [String]) {
 
-        guard let route = recording.route else { return [] }
+        guard let route = recording.route else { return ([], []) }
         guard let service = speedLimitServiceFactory() else {
-            warnings.append("제한속도 데이터베이스를 열지 못해 속도 관련 안내를 건너뛰었습니다.")
-            return []
+            return ([], ["제한속도 데이터베이스를 열지 못해 속도 관련 안내를 건너뛰었습니다."])
         }
         // 경상북도 전용 데이터셋이다. 도 밖이면 조회 자체가 헛수고다.
         guard KoreaCoordinateConverter.isInsideDataset(route.goal) else {
-            warnings.append("경상북도 밖이라 제한속도 데이터를 쓸 수 없습니다.")
-            return []
+            return ([], ["경상북도 밖이라 제한속도 데이터를 쓸 수 없습니다."])
         }
 
         do {
             try await service.prepare(for: route)
-            return service.routeSegments
+            return (service.routeSegments, [])
         } catch {
-            warnings.append("제한속도 구간을 불러오지 못했습니다: \(error.localizedDescription)")
-            return []
+            return ([], ["제한속도 구간을 불러오지 못했습니다: \(error.localizedDescription)"])
         }
     }
 
-    private func loadEnforcementZones(for recording: DriveRecording,
-                                      warnings: inout [String]) async -> [EnforcementZone] {
+    private func loadEnforcementZones(
+        for recording: DriveRecording
+    ) async -> (zones: [EnforcementZone], warnings: [String]) {
 
-        guard let goal = recording.route?.goal else { return [] }
+        guard let goal = recording.route?.goal else { return ([], []) }
 
         do {
-            return try await enforcementService.zones(near: goal, radiusMeters: enforcementRadiusMeters)
+            let zones = try await enforcementService.zones(near: goal,
+                                                           radiusMeters: enforcementRadiusMeters)
+            return (zones, [])
         } catch {
-            warnings.append("주정차 금지구간을 불러오지 못했습니다: \(error.localizedDescription)")
-            return []
+            return ([], ["주정차 금지구간을 불러오지 못했습니다: \(error.localizedDescription)"])
         }
     }
 }
