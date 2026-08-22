@@ -17,6 +17,8 @@ final class MapHomeViewModel: ObservableObject {
     /// 도 전체가 들어오는 정도의 축척. 현재 위치를 잡으면 `focusZoom` 으로 당긴다.
     private static let fallbackZoom: Double = 9
     private static let focusZoom: Double = 15
+    /// 이 거리 안에 들어왔을 때만 주행 종료 버튼을 노출한다.
+    private static let finishButtonVisibilityDistanceMeters: Double = 1_000
 
     // MARK: 입력
 
@@ -226,6 +228,9 @@ final class MapHomeViewModel: ObservableObject {
     var simulatedSpeedKPH: Int { simulationState?.currentSpeedKPH ?? 0 }
     var simulatedSpeedLimitKPH: Int? { simulationState?.speedLimitKPH }
     var hasArrived: Bool { simulationState?.isFinished == true }
+    var canFinishDriving: Bool {
+        isDriving && remainingDistance <= Self.finishButtonVisibilityDistanceMeters
+    }
 
     private func route(for option: RouteOption) -> DrivingRoute? {
         switch option {

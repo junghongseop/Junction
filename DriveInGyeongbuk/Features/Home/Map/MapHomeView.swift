@@ -210,13 +210,17 @@ struct MapHomeView: View {
 
                 Spacer()
 
-                Button("Finish", action: viewModel.finishDriving)
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(Color(red: 105 / 255, green: 0, blue: 5 / 255))
-                    .padding(.horizontal, 24)
-                    .frame(height: 48)
-                    .background(Color(red: 1, green: 180 / 255, blue: 171 / 255), in: .capsule)
+                if viewModel.canFinishDriving {
+                    Button("Finish", action: viewModel.finishDriving)
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundStyle(Color(red: 105 / 255, green: 0, blue: 5 / 255))
+                        .padding(.horizontal, 24)
+                        .frame(height: 48)
+                        .background(Color(red: 1, green: 180 / 255, blue: 171 / 255), in: .capsule)
+                        .transition(.scale.combined(with: .opacity))
+                }
             }
+            .animation(.easeInOut(duration: 0.2), value: viewModel.canFinishDriving)
             .padding(.horizontal, 16)
             .padding(.bottom, 32)
 
