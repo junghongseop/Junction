@@ -211,13 +211,12 @@ struct MapHomeView: View {
                 Spacer()
 
                 if viewModel.canFinishDriving {
-                    Button("Finish", action: viewModel.finishDriving)
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundStyle(Color(red: 105 / 255, green: 0, blue: 5 / 255))
-                        .padding(.horizontal, 24)
-                        .frame(height: 48)
-                        .background(Color(red: 1, green: 180 / 255, blue: 171 / 255), in: .capsule)
-                        .transition(.scale.combined(with: .opacity))
+                    VStack(spacing: 24) {
+                        parkingButton
+                        finishButton
+                    }
+                    .frame(width: 120)
+                    .transition(.scale.combined(with: .opacity))
                 }
             }
             .animation(.easeInOut(duration: 0.2), value: viewModel.canFinishDriving)
@@ -229,6 +228,26 @@ struct MapHomeView: View {
                 .padding(.bottom, 20)
         }
         .ignoresSafeArea(edges: .bottom)
+    }
+
+    private var parkingButton: some View {
+        Text("P")
+            .font(.system(size: 40, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: 100, height: 100)
+            .background(Color(red: 0, green: 82 / 255, blue: 212 / 255), in: .circle)
+            .overlay(Circle().stroke(Color.white.opacity(0.3)))
+            .frame(width: 120, height: 120)
+            .accessibilityLabel("Parking")
+    }
+
+    private var finishButton: some View {
+        Button("Finish", action: viewModel.finishDriving)
+            .font(.system(size: 18, weight: .bold))
+            .foregroundStyle(Color(red: 105 / 255, green: 0, blue: 5 / 255))
+            .padding(.horizontal, 24)
+            .frame(height: 48)
+            .background(Color(red: 1, green: 180 / 255, blue: 171 / 255), in: .capsule)
     }
 
     private var maneuverCard: some View {
