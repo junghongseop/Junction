@@ -25,19 +25,35 @@ struct NaverLocation: Identifiable, Hashable {
     var description: String
     var roadAddress: String
     var jibunAddress: String
+    var englishAddress: String
     var coordinate: NaverCoordinate
     var link: URL?
 
-    var displayAddress: String { roadAddress.isEmpty ? jibunAddress : roadAddress }
+    var displayTitle: String {
+        title
+    }
+
+    var displayCategory: String {
+        category.romanizedForEnglishDisplay
+    }
+
+    var displayAddress: String {
+        englishAddress.nilIfBlank
+            ?? sourceDisplayAddress.romanizedForEnglishDisplay
+    }
 
     var geocodedPlace: GeocodedPlace {
         GeocodedPlace(coordinate: coordinate,
                       roadAddress: roadAddress,
                       jibunAddress: jibunAddress,
-                      englishAddress: "",
-                      sido: Self.firstAddressComponent(of: displayAddress),
-                      sigungu: Self.secondAddressComponent(of: displayAddress),
-                      placeName: title)
+                      englishAddress: englishAddress,
+                      sido: Self.firstAddressComponent(of: sourceDisplayAddress),
+                      sigungu: Self.secondAddressComponent(of: sourceDisplayAddress),
+                      placeName: displayTitle)
+    }
+
+    private var sourceDisplayAddress: String {
+        roadAddress.isEmpty ? jibunAddress : roadAddress
     }
 
     private static func firstAddressComponent(of address: String) -> String? {
@@ -77,13 +93,16 @@ struct NaverLocationSearchService: NaverLocationSearchServicing {
     private let clientID: String
     private let clientSecret: String
     private let session: URLSession
+    private let geocodingService: NaverGeocodingServicing
 
     init(clientID: String = AppConfig.naverSearchClientID,
          clientSecret: String = AppConfig.naverSearchClientSecret,
-         session: URLSession = .shared) {
+         session: URLSession = .shared,
+         geocodingService: NaverGeocodingServicing = NaverGeocodingService()) {
         self.clientID = clientID
         self.clientSecret = clientSecret
         self.session = session
+        self.geocodingService = geocodingService
     }
 
     func search(query: String, display: Int = 5) async throws -> [NaverLocation] {
@@ -132,8 +151,29 @@ struct NaverLocationSearchService: NaverLocationSearchServicing {
             throw NaverLocationSearchError.decoding(error.localizedDescription)
         }
 
-        let locations = dto.items.compactMap(Self.makeLocation)
+        var locations = dto.items.compactMap(Self.makeLocation)
         guard !locations.isEmpty else { throw NaverLocationSearchError.emptyResult }
+
+        // 지역 검색 API에는 응답 언어 옵션이 없다. 같은 네이버 Maps Geocoding API를
+        // 영어 모드로 호출해 주소를 보강하고, 보강 실패 시에는 로마자 주소를 쓴다.
+        for index in locations.indices {
+            let query = locations[index].roadAddress.isEmpty
+                ? locations[index].jibunAddress
+                : locations[index].roadAddress
+            guard !query.isEmpty,
+                  let englishPlace = try? await geocodingService.geocode(
+                    query: query,
+                    near: locations[index].coordinate,
+                    limit: 1,
+                    language: .english
+                  ).first else { continue }
+
+            locations[index].englishAddress = [
+                englishPlace.roadAddress,
+                englishPlace.englishAddress,
+                englishPlace.jibunAddress
+            ].first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? ""
+        }
         return locations
     }
 
@@ -154,6 +194,7 @@ struct NaverLocationSearchService: NaverLocationSearchServicing {
                              description: item.description.removingHTMLTags,
                              roadAddress: item.roadAddress,
                              jibunAddress: item.address,
+                             englishAddress: "",
                              coordinate: coordinate,
                              link: URL(string: item.link))
     }
@@ -190,6 +231,26 @@ struct NaverLocationSearchService: NaverLocationSearchServicing {
 }
 
 private extension String {
+    var containsHangul: Bool {
+        unicodeScalars.contains { scalar in
+            (0xAC00...0xD7A3).contains(scalar.value)
+                || (0x1100...0x11FF).contains(scalar.value)
+                || (0x3130...0x318F).contains(scalar.value)
+        }
+    }
+
+    var nilIfBlank: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    var romanizedForEnglishDisplay: String {
+        guard containsHangul else { return self }
+        guard let latin = applyingTransform(.toLatin, reverse: false)?
+            .applyingTransform(.stripDiacritics, reverse: false) else { return self }
+        return latin.capitalized(with: Locale(identifier: "en_US"))
+    }
+
     var removingHTMLTags: String {
         replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
             .replacingOccurrences(of: "&amp;", with: "&")

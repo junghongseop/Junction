@@ -195,8 +195,8 @@ enum NaverMapsError: Error, LocalizedError, Equatable {
         case .transport(let reason):
             return "네트워크 오류가 발생했습니다. (\(reason))"
         case .httpStatus(let code, let body):
-            let trimmed = body.prefix(300)
-            return "서버가 \(code) 를 반환했습니다. \(trimmed)"
+            let message = Self.apiMessage(from: body) ?? String(body.prefix(300))
+            return "서버가 \(code) 를 반환했습니다. \(message)"
         case .decoding(let reason):
             return "응답을 해석하지 못했습니다. (\(reason))"
         case .api(let code, let message):
@@ -204,6 +204,18 @@ enum NaverMapsError: Error, LocalizedError, Equatable {
         case .emptyResult:
             return "결과가 없습니다."
         }
+    }
+
+    private static func apiMessage(from body: String) -> String? {
+        guard let data = body.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        if let error = object["error"] as? [String: Any],
+           let message = error["message"] as? String {
+            return message
+        }
+        return object["message"] as? String
     }
 }
 
