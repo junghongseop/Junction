@@ -19,6 +19,19 @@ import Combine
 import SwiftUI
 import WebKit
 
+// MARK: - 인증 파라미터
+
+/// maps.js 에 키를 실어 보낼 때 쓰는 쿼리 파라미터 이름.
+///
+/// 키를 발급받은 시점에 따라 검증 엔드포인트가 달라서 이름도 달라진다.
+/// 콘솔에서 어느 쪽인지 확인할 수 없다면 둘 다 시도해 보는 수밖에 없다.
+enum NaverMapAuthParameter: String {
+    /// 신규 콘솔에서 발급한 키. `oapi.map.naver.com/v3/auth` 로 검증된다.
+    case keyID = "ncpKeyId"
+    /// 예전에 발급한 키. `oapi.map.naver.com/v1/validatev3` 로 검증된다.
+    case clientID = "ncpClientId"
+}
+
 // MARK: - Controller
 
 /// 지도에 그릴 내용을 Swift 쪽에서 명령하기 위한 컨트롤러.
@@ -92,6 +105,10 @@ final class NaverMapWebController: ObservableObject {
 
     fileprivate func handleError(_ message: String) {
         mapError = message
+        // 인증이 실패하면 SDK 가 naver.maps 를 해제하므로 이후 명령은 모두 무의미하다.
+        // 큐에만 쌓여 메모리를 먹지 않도록 준비 상태를 내리고 대기열을 비운다.
+        isReady = false
+        pendingScripts.removeAll()
     }
 
     private func evaluate(_ script: String) {
@@ -140,6 +157,9 @@ struct NaverMapWebView: UIViewRepresentable {
 
     @ObservedObject var controller: NaverMapWebController
 
+    /// 키 종류에 맞는 파라미터 이름. 인증이 실패하면 다른 값으로 바꿔서 시도해 본다.
+    var authParameter: NaverMapAuthParameter = .keyID
+
     func makeCoordinator() -> Coordinator {
         Coordinator(controller: controller)
     }
@@ -158,7 +178,8 @@ struct NaverMapWebView: UIViewRepresentable {
         webView.scrollView.bounces = false
 
         controller.attach(webView)
-        webView.loadHTMLString(Self.makeHTML(clientID: AppConfig.naverMapClientID),
+        webView.loadHTMLString(Self.makeHTML(clientID: AppConfig.naverMapClientID,
+                                            authParameter: authParameter),
                                baseURL: AppConfig.naverMapWebServiceURL)
         return webView
     }
@@ -221,8 +242,10 @@ struct NaverMapWebView: UIViewRepresentable {
 
 private extension NaverMapWebView {
 
-    static func makeHTML(clientID: String) -> String {
-        htmlTemplate.replacingOccurrences(of: "__CLIENT_ID__", with: clientID)
+    static func makeHTML(clientID: String, authParameter: NaverMapAuthParameter) -> String {
+        htmlTemplate
+            .replacingOccurrences(of: "__CLIENT_ID__", with: clientID)
+            .replacingOccurrences(of: "__AUTH_PARAM__", with: authParameter.rawValue)
     }
 
     static let htmlTemplate = #"""
@@ -245,6 +268,7 @@ private extension NaverMapWebView {
       <div id="map"></div>
       <script>
         var CLIENT_ID = "__CLIENT_ID__";
+        var AUTH_PARAM = "__AUTH_PARAM__";
         var map = null, polyline = null, markers = [], highlightMarker = null;
 
         function post(name, body) {
@@ -256,9 +280,13 @@ private extension NaverMapWebView {
         window.onerror = function (message) { post("log", { message: String(message) }); };
 
         // 네이버 지도 SDK 가 인증 실패 시 호출하는 전역 콜백.
+        // 스크립트 로딩 1초쯤 뒤에 불리며, 이때 SDK 가 naver.maps 를 스스로 해제한다.
         window.navermap_authFailure = function () {
           post("authFailure", {
-            message: "네이버 지도 인증에 실패했습니다. Client ID 와 NCP 콘솔의 Web 서비스 URL 등록을 확인하세요."
+            message: "네이버 지도 인증에 실패했습니다 (키: " + CLIENT_ID + ", 문서 URL: " + location.href + ").\n"
+                   + "NCP 콘솔 > Maps 애플리케이션에서 다음을 확인하세요.\n"
+                   + "① Web Dynamic Map 서비스가 선택되어 있는지\n"
+                   + "② Web 서비스 URL 에 " + location.origin + " 이 등록되어 있는지"
           });
         };
 
@@ -355,24 +383,32 @@ private extension NaverMapWebView {
           post("ready", {});
         }
 
-        // 신규 키는 ncpKeyId, 이전에 발급된 키는 ncpClientId 를 쓴다. 순서대로 시도한다.
-        function loadSDK(paramName, onFail) {
+        // maps.js 는 키가 틀려도 항상 HTTP 200 으로 내려온다.
+        // 따라서 script.onerror 로는 인증 실패를 알 수 없고, 오직 네트워크 장애만 잡힌다.
+        // 실제 인증 판정은 SDK 가 oapi.map.naver.com/v3/auth 를 호출한 뒤
+        // window.navermap_authFailure 로 알려 준다.
+        //
+        // 키 종류에 따라 파라미터 이름이 다르다.
+        //   - 신규 콘솔에서 발급한 키: ncpKeyId  (→ /v3/auth 로 검증)
+        //   - 예전에 발급한 키:       ncpClientId (→ /v1/validatev3 로 검증)
+        // 어느 쪽인지는 응답을 봐야만 알 수 있어서 Swift 쪽에서 지정한다.
+        function loadSDK() {
           var script = document.createElement("script");
           script.src = "https://oapi.map.naver.com/openapi/v3/maps.js?"
-                     + paramName + "=" + encodeURIComponent(CLIENT_ID);
+                     + AUTH_PARAM + "=" + encodeURIComponent(CLIENT_ID);
           script.onload = initMap;
-          script.onerror = onFail;
+          script.onerror = function () {
+            post("authFailure", {
+              message: "지도 스크립트를 내려받지 못했습니다. 네트워크 연결을 확인하세요."
+            });
+          };
           document.head.appendChild(script);
         }
 
         if (!CLIENT_ID) {
           post("authFailure", { message: "Client ID 가 비어 있습니다. Config/Config.xcconfig 를 확인하세요." });
         } else {
-          loadSDK("ncpKeyId", function () {
-            loadSDK("ncpClientId", function () {
-              post("authFailure", { message: "지도 스크립트를 불러오지 못했습니다. 네트워크와 키를 확인하세요." });
-            });
-          });
+          loadSDK();
         }
       </script>
     </body>
