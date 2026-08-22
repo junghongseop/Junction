@@ -1,0 +1,24 @@
+// Config.xcconfig.sample
+//
+// 이 파일을 같은 폴더에 `Config.xcconfig` 라는 이름으로 복사한 뒤
+// 값을 채워 넣으세요. `Config.xcconfig` 는 .gitignore 대상이라 커밋되지 않습니다.
+//
+//   cp DriveInGyeongbuk/Config/Config.xcconfig.sample DriveInGyeongbuk/Config/Config.xcconfig
+//
+// 키 발급: NAVER Cloud Platform 콘솔 > Services > Application Services > Maps
+//   - Web Dynamic Map     (테스트 UI 의 지도 표시에 필요)
+//   - Geocoding           (NaverGeocodingService)
+//   - Directions 5        (NaverDirectionsService)
+// 세 가지를 모두 켜 두어야 합니다.
+//
+// 주의: xcconfig 는 `//` 를 주석으로 처리합니다. 값에 URL 을 넣을 일은 없지만,
+//       넣어야 한다면 `SLASH = /` 를 정의해 `https:$(SLASH)$(SLASH)...` 형태로 씁니다.
+
+// NCP 애플리케이션의 Client ID (API Key ID)
+Naver_Map_Client_ID =
+
+// NCP 애플리케이션의 Client Secret (API Key)
+Naver_Map_Client_Secret =
+
+// (선택) Client ID 하나만 쓰던 기존 설정 호환용
+Naver_Map_API_Key = $(Naver_Map_Client_ID)

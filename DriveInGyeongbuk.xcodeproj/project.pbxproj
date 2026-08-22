@@ -14,6 +14,7 @@
 		A90110A73039704400046CAA /* Exceptions for "DriveInGyeongbuk" folder in "DriveInGyeongbuk" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				Config/Config.xcconfig.sample,
 				Info.plist,
 			);
 			target = A96417AF3039671D001FF543 /* DriveInGyeongbuk */;
