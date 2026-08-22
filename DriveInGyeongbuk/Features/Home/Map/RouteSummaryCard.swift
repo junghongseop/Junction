@@ -38,7 +38,7 @@ struct RouteSummaryCard: View {
             }
 
             HStack(spacing: 11) {
-                metricCard(title: "Hi-Pass",
+                metricCard(title: route.usesTollRoad ? "Hi-Pass" : "Fastest",
                            route: route)
                 metricCard(title: "Safe Path",
                            route: safeRoute ?? route)
@@ -106,6 +106,7 @@ struct RouteSummaryCard: View {
 }
 
 extension DrivingRoute {
+    var usesTollRoad: Bool { tollFare > 0 || !tollGateSteps.isEmpty }
     var durationMinutes: Int { max(1, Int(ceil(Double(duration) / 60))) }
     var distanceValue: String {
         distance >= 1000 ? String(format: "%.1f", Double(distance) / 1000) : "\(distance)"

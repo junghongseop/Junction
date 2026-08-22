@@ -372,7 +372,7 @@ private extension RouteStep {
         case .uTurn: return "Make a U-turn"
         case .keepLeft: return "Keep left"
         case .keepRight: return "Keep right"
-        case .tollGate: return "Use the Hi-Pass lane"
+        case .tollGate: return "Toll gate ahead"
         case .highwayEntrance: return "Enter the highway"
         case .highwayExit: return "Take the exit"
         case .roundabout: return "Enter the roundabout"
