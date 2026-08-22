@@ -35,6 +35,8 @@ final class NaverMapController: ObservableObject {
     private var routePath: NMFPath?
     private var endpointMarkers: [NMFMarker] = []
     private var simulatedVehicleMarker: NMFMarker?
+    private var parkingRestrictionPaths: [NMFPath] = []
+    private var parkingRestrictionMarkers: [NMFMarker] = []
 
     // MARK: 명령
 
@@ -116,6 +118,47 @@ final class NaverMapController: ObservableObject {
         simulatedVehicleMarker = nil
     }
 
+    /// 도착지 주변 주정차 금지구역을 피그마 시안처럼 굵은 빨간 도로선으로 표시한다.
+    ///
+    /// 서버 응답의 `path` 가 한 점뿐인 구역은 선을 만들 수 없어서 같은 색의 점으로 대신한다.
+    func showParkingRestrictions(_ zones: [EnforcementZone]) {
+        run {
+            guard let mapView = self.mapView else { return }
+            self.removeParkingRestrictionOverlays()
+
+            for zone in zones {
+                let points = zone.path.map {
+                    NMGLatLng(lat: $0.latitude, lng: $0.longitude)
+                }
+
+                if points.count >= 2 {
+                    let path = NMFPath()
+                    path.path = NMGLineString(points: points)
+                    path.width = 8
+                    path.outlineWidth = 2
+                    path.color = UIColor(red: 1, green: 82 / 255, blue: 103 / 255, alpha: 0.9)
+                    path.outlineColor = UIColor(red: 134 / 255, green: 2 / 255, blue: 13 / 255, alpha: 0.95)
+                    path.zIndex = 50
+                    path.mapView = mapView
+                    self.parkingRestrictionPaths.append(path)
+                } else if let point = points.first {
+                    let marker = NMFMarker(position: point)
+                    marker.iconImage = NMFOverlayImage(image: Self.parkingRestrictionPointImage)
+                    marker.width = 18
+                    marker.height = 18
+                    marker.anchor = CGPoint(x: 0.5, y: 0.5)
+                    marker.zIndex = 50
+                    marker.mapView = mapView
+                    self.parkingRestrictionMarkers.append(marker)
+                }
+            }
+        }
+    }
+
+    func clearParkingRestrictions() {
+        run { self.removeParkingRestrictionOverlays() }
+    }
+
     /// 자동차 경로와 출발·도착 마커를 그리고, 하단 요약 카드 위로 전체 경로를 맞춘다.
     func showRoute(_ route: DrivingRoute,
                    fitsRoute: Bool = true,
@@ -168,6 +211,7 @@ final class NaverMapController: ObservableObject {
     /// 지도 위의 경로 및 출발·도착 마커를 지운다.
     func clear() {
         removeRouteOverlays()
+        removeParkingRestrictionOverlays()
     }
 
     // MARK: 내부
@@ -203,6 +247,23 @@ final class NaverMapController: ObservableObject {
         endpointMarkers.forEach { $0.mapView = nil }
         endpointMarkers = []
     }
+
+    private func removeParkingRestrictionOverlays() {
+        parkingRestrictionPaths.forEach { $0.mapView = nil }
+        parkingRestrictionPaths = []
+        parkingRestrictionMarkers.forEach { $0.mapView = nil }
+        parkingRestrictionMarkers = []
+    }
+
+    private static let parkingRestrictionPointImage: UIImage = {
+        let size = CGSize(width: 18, height: 18)
+        return UIGraphicsImageRenderer(size: size).image { _ in
+            UIColor(red: 134 / 255, green: 2 / 255, blue: 13 / 255, alpha: 0.95).setFill()
+            UIBezierPath(ovalIn: CGRect(origin: .zero, size: size)).fill()
+            UIColor(red: 1, green: 132 / 255, blue: 118 / 255, alpha: 1).setFill()
+            UIBezierPath(ovalIn: CGRect(x: 3, y: 3, width: 12, height: 12)).fill()
+        }
+    }()
 
     /// 외부 이미지 의존성 없이 그린 상단 시점 차량 아이콘.
     private static let simulatedVehicleImage: UIImage = {

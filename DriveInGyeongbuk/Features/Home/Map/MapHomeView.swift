@@ -146,6 +146,15 @@ struct MapHomeView: View {
         .toolbarVisibility(viewModel.isDriving ? .hidden : .visible, for: .navigationBar)
         .toolbarVisibility(.hidden, for: .tabBar)
         .toolbarBackground(.hidden, for: .navigationBar)
+        .alert("Unable to route to parking",
+               isPresented: Binding(
+                get: { viewModel.parkingRouteErrorMessage != nil },
+                set: { if !$0 { viewModel.dismissParkingRouteError() } }
+               )) {
+            Button("OK", role: .cancel) { viewModel.dismissParkingRouteError() }
+        } message: {
+            Text(viewModel.parkingRouteErrorMessage ?? "Please try again.")
+        }
         .task(id: viewModel.destination?.id) {
             guard viewModel.route == nil, !viewModel.isRouteLoading else { return }
             await viewModel.retryRoute()
@@ -231,14 +240,32 @@ struct MapHomeView: View {
     }
 
     private var parkingButton: some View {
-        Text("P")
-            .font(.system(size: 40, weight: .bold))
-            .foregroundStyle(.white)
+        Button {
+            Task { await viewModel.navigateToNearestParking() }
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(Color(red: 0, green: 82 / 255, blue: 212 / 255))
+                    .overlay(Circle().stroke(Color.white.opacity(0.3)))
+
+                if viewModel.isParkingRouteLoading {
+                    ProgressView()
+                        .controlSize(.large)
+                        .tint(.white)
+                } else {
+                    Text("P")
+                        .font(.system(size: 40, weight: .bold))
+                        .foregroundStyle(.white)
+                }
+            }
             .frame(width: 100, height: 100)
-            .background(Color(red: 0, green: 82 / 255, blue: 212 / 255), in: .circle)
-            .overlay(Circle().stroke(Color.white.opacity(0.3)))
             .frame(width: 120, height: 120)
-            .accessibilityLabel("Parking")
+        }
+        .buttonStyle(.plain)
+        .disabled(viewModel.isParkingRouteLoading || viewModel.selectedParkingLot != nil)
+        .accessibilityLabel(viewModel.isParkingRouteLoading
+                            ? "Finding the nearest parking lot"
+                            : "Route to the nearest parking lot")
     }
 
     private var finishButton: some View {
@@ -250,7 +277,53 @@ struct MapHomeView: View {
             .background(Color(red: 1, green: 180 / 255, blue: 171 / 255), in: .capsule)
     }
 
+    @ViewBuilder
     private var maneuverCard: some View {
+        if viewModel.isApproachingDestination {
+            approachingDestinationHeader
+        } else {
+            regularManeuverCard
+        }
+    }
+
+    private var approachingDestinationHeader: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Approaching destination")
+                .font(.system(size: 32, weight: .bold))
+                .foregroundStyle(Color(red: 218 / 255, green: 226 / 255, blue: 253 / 255))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(16)
+                .background(Color(red: 23 / 255, green: 35 / 255, blue: 64 / 255),
+                            in: RoundedRectangle(cornerRadius: 16))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(Color.white.opacity(0.1))
+                }
+
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 24, weight: .bold))
+                    .foregroundStyle(Color(red: 1, green: 180 / 255, blue: 171 / 255))
+
+                Text("No parking in red zones")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundStyle(Color(red: 1, green: 132 / 255, blue: 118 / 255))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 46)
+            .background(Color(red: 134 / 255, green: 2 / 255, blue: 13 / 255),
+                        in: RoundedRectangle(cornerRadius: 12))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color(red: 1, green: 132 / 255, blue: 118 / 255))
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityHint(viewModel.parkingRestrictionErrorMessage ?? "Red roads show no-parking zones.")
+    }
+
+    private var regularManeuverCard: some View {
         let step = viewModel.currentInstruction
         return VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 16) {
@@ -332,15 +405,7 @@ struct MapHomeView: View {
 
     @ViewBuilder
     private var simulationSpeedBadge: some View {
-        if viewModel.hasArrived {
-            Text("0 km/h")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(.black.opacity(0.7), in: .capsule)
-                .accessibilityLabel("Stopped, zero kilometers per hour")
-        } else if let speedLimit = viewModel.simulatedSpeedLimitKPH {
+        if let speedLimit = viewModel.simulatedSpeedLimitKPH {
             VStack(spacing: 4) {
                 ZStack {
                     Circle()
@@ -352,7 +417,7 @@ struct MapHomeView: View {
                 }
                 .frame(width: 56, height: 56)
 
-                Text("\(viewModel.simulatedSpeedKPH) km/h")
+                Text("\(viewModel.hasArrived ? 0 : viewModel.simulatedSpeedKPH) km/h")
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 7)
@@ -360,7 +425,9 @@ struct MapHomeView: View {
                     .background(.black.opacity(0.65), in: .capsule)
             }
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Speed limit \(speedLimit), current speed \(viewModel.simulatedSpeedKPH) kilometers per hour")
+            .accessibilityLabel(
+                "Speed limit \(speedLimit), current speed \(viewModel.hasArrived ? 0 : viewModel.simulatedSpeedKPH) kilometers per hour"
+            )
         }
     }
 
