@@ -9,8 +9,7 @@
 //
 //  컨트롤러 인터페이스는 `NaverMapWebController` 와 같은 이름을 쓰되,
 //  이 화면에 필요한 것만 먼저 구현했다.
-//    구현됨 : focus / moveToCurrentLocation / clear
-//    TODO   : showMarkers / showRoute / highlight — 경로 안내 화면을 붙일 때 채운다
+//    구현됨 : focus / moveToCurrentLocation / showRoute / clear
 //
 //  ⚠️ NCP 콘솔의 Maps 애플리케이션에 **Mobile Dynamic Map** 서비스가 켜져 있고
 //     iOS 번들 ID 가 등록되어 있어야 인증이 통과한다. (Web 서비스 URL 과는 별개다)
@@ -33,6 +32,8 @@ final class NaverMapController: ObservableObject {
     fileprivate weak var mapView: NMFMapView?
     /// 지도가 붙기 전에 들어온 명령을 하나만 기억해 둔다. (카메라 이동은 마지막 것만 의미가 있다)
     private var pendingCameraUpdate: (() -> Void)?
+    private var routePath: NMFPath?
+    private var endpointMarkers: [NMFMarker] = []
 
     // MARK: 명령
 
@@ -53,9 +54,49 @@ final class NaverMapController: ObservableObject {
         run { self.mapView?.positionMode = .direction }
     }
 
-    /// 지도 위에 그린 것들을 모두 지운다. 지금은 그리는 게 없어서 할 일이 없다.
+    /// 자동차 경로와 출발·도착 마커를 그리고, 하단 요약 카드 위로 전체 경로를 맞춘다.
+    func showRoute(_ route: DrivingRoute) {
+        run {
+            guard let mapView = self.mapView, route.path.count >= 2 else { return }
+            self.removeRouteOverlays()
+
+            let points = route.path.map {
+                NMGLatLng(lat: $0.latitude, lng: $0.longitude)
+            }
+            let path = NMFPath()
+            path.path = NMGLineString(points: points)
+            path.width = 7
+            path.outlineWidth = 2
+            path.color = UIColor(red: 79 / 255, green: 121 / 255, blue: 1, alpha: 1)
+            path.outlineColor = UIColor(red: 14 / 255, green: 31 / 255, blue: 67 / 255, alpha: 1)
+            path.mapView = mapView
+            self.routePath = path
+
+            let start = NMFMarker(position: points[0])
+            start.iconImage = NMF_MARKER_IMAGE_GREEN
+            start.captionText = "Start"
+            start.mapView = mapView
+
+            let goal = NMFMarker(position: points[points.count - 1])
+            goal.iconImage = NMF_MARKER_IMAGE_BLUE
+            goal.captionText = "Destination"
+            goal.mapView = mapView
+            self.endpointMarkers = [start, goal]
+
+            let bounds = NMGLatLngBounds(latLngs: points)
+            let update = NMFCameraUpdate(fit: bounds,
+                                         paddingInsets: UIEdgeInsets(top: 96,
+                                                                     left: 40,
+                                                                     bottom: 390,
+                                                                     right: 40))
+            update.animation = .easeIn
+            mapView.moveCamera(update)
+        }
+    }
+
+    /// 지도 위의 경로 및 출발·도착 마커를 지운다.
     func clear() {
-        // TODO: 마커·폴리라인을 그리기 시작하면 여기서 걷어낸다.
+        removeRouteOverlays()
     }
 
     // MARK: 내부
@@ -83,6 +124,13 @@ final class NaverMapController: ObservableObject {
             return
         }
         command()
+    }
+
+    private func removeRouteOverlays() {
+        routePath?.mapView = nil
+        routePath = nil
+        endpointMarkers.forEach { $0.mapView = nil }
+        endpointMarkers = []
     }
 }
 

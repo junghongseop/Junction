@@ -17,16 +17,53 @@ import SwiftUI
 
 struct MapHomeView: View {
 
+    private enum DestinationRoute: Hashable {
+        case search
+        case routePreview
+    }
+
     @StateObject private var viewModel = MapHomeViewModel()
     @Environment(\.colorScheme) private var colorScheme
 
     @State private var isShowingInfo = false
+    @State private var navigationPath: [DestinationRoute] = []
 
     /// 시안 값. 지도 로고가 하단 탭바에 가리지 않도록 띄우는 여백이기도 하다.
     private let horizontalMargin: CGFloat = 16
     private let stackSpacing: CGFloat = 24
 
     var body: some View {
+        NavigationStack(path: $navigationPath) {
+            homeMap
+                .toolbarVisibility(.hidden, for: .navigationBar)
+                .navigationDestination(for: DestinationRoute.self) { route in
+                    switch route {
+                    case .search:
+                        SearchView(initialQuery: viewModel.searchText) { location in
+                            viewModel.prepareDestination(location)
+                            // 검색 화면을 스택에 남겨 경로 화면의 기본 뒤로가기가 검색으로 돌아가게 한다.
+                            navigationPath.append(.routePreview)
+                        }
+                    case .routePreview:
+                        routePreview
+                    }
+                }
+        }
+        .sheet(isPresented: $isShowingInfo) { AppInfoView() }
+        .onChange(of: navigationPath) { _, newPath in
+            guard viewModel.destination != nil else { return }
+            if newPath.isEmpty {
+                viewModel.clearDestination()
+            } else if !newPath.contains(.routePreview) {
+                // 경로 화면 → 검색 화면에서는 검색 상태를 보존한다.
+                viewModel.leaveRoutePreview()
+            }
+        }
+        .onAppear { viewModel.onAppear() }
+        .onDisappear { viewModel.onDisappear() }
+    }
+
+    private var homeMap: some View {
         ZStack(alignment: .top) {
             NaverMapView(controller: viewModel.map,
                          positionMode: viewModel.isTrackingLocation ? .direction : .disabled,
@@ -36,9 +73,6 @@ struct MapHomeView: View {
 
             topControls
         }
-        .sheet(isPresented: $isShowingInfo) { AppInfoView() }
-        .onAppear { viewModel.onAppear() }
-        .onDisappear { viewModel.onDisappear() }
     }
 
     // MARK: - 상단 오버레이
@@ -60,23 +94,81 @@ struct MapHomeView: View {
     }
 
     private var searchField: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(.secondary)
+        DestinationSearchField {
+            Button {
+                navigationPath.append(.search)
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 15, weight: .medium))
 
-            // TODO: 제출 시 NaverGeocodingService 로 목적지를 찾아 경로 화면으로 넘긴다.
-            //       (목적지 검색 결과 시안이 아직 없어 입력만 받아 둔다)
-            TextField("Search destination", text: $viewModel.searchText)
-                .font(.system(size: 16, weight: .medium))
-                .tracking(0.4)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .submitLabel(.search)
+                    Text(viewModel.searchText.isEmpty ? "Search destination" : viewModel.searchText)
+                        .font(.system(size: 16, weight: .medium))
+                        .tracking(0.4)
+                        .lineLimit(1)
+
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(.secondary)
+                .contentShape(.capsule)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Search destination")
         }
-        .padding(.horizontal, 17)
-        .frame(height: 56)
-        .glassEffect(.regular.interactive(), in: .capsule)
+    }
+
+    // MARK: - 경로 미리보기
+
+    private var routePreview: some View {
+        ZStack {
+            NaverMapView(controller: viewModel.routeMap,
+                         positionMode: viewModel.isDriving ? .direction : .disabled,
+                         isNightMode: colorScheme == .dark,
+                         logoMargin: UIEdgeInsets(top: 0, left: 12, bottom: 390, right: 0))
+                .ignoresSafeArea()
+
+            VStack {
+                Spacer()
+                routeCard
+                    .padding(.horizontal, 18.5)
+                    .padding(.bottom, 40)
+            }
+            .ignoresSafeArea(edges: .bottom)
+        }
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarVisibility(.visible, for: .navigationBar)
+        .toolbarVisibility(.hidden, for: .tabBar)
+        .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
+        .task(id: viewModel.destination?.id) {
+            guard viewModel.route == nil, !viewModel.isRouteLoading else { return }
+            await viewModel.retryRoute()
+        }
+    }
+
+    @ViewBuilder
+    private var routeCard: some View {
+        if viewModel.isRouteLoading {
+            ProgressView("Finding the best route…")
+                .frame(maxWidth: .infinity, minHeight: 180)
+                .routeCardStyle()
+        } else if let errorMessage = viewModel.routeErrorMessage {
+            ContentUnavailableView {
+                Label("Route unavailable", systemImage: "point.bottomleft.forward.to.point.topright.scurvepath")
+            } description: {
+                Text(errorMessage)
+            } actions: {
+                Button("Try again") { Task { await viewModel.retryRoute() } }
+            }
+            .frame(maxWidth: .infinity, minHeight: 220)
+            .routeCardStyle()
+        } else if let route = viewModel.route, let destination = viewModel.destination {
+            RouteSummaryCard(destination: destination,
+                             route: route,
+                             safeRoute: viewModel.safeRoute,
+                             onStart: viewModel.startDriving)
+        }
     }
 
     private func locationStatus(_ message: String) -> some View {

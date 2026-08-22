@@ -48,10 +48,15 @@ struct NaverDirectionsService: NaverDirectionsServicing {
     static let maxWaypointCount = 5
 
     private let runner: NaverMapsRequestRunner
+    /// 지역 검색 좌표와 GPS 좌표를 실제 도로 중심선으로 보정할 때 사용한다.
+    /// 번들 DB를 열 수 없거나 경북 밖이면 원래 좌표만으로 Directions를 요청한다.
+    private let roadDataSource: (any SpeedLimitDataSource)?
 
     init(configuration: NaverMapsConfiguration = .default,
-         httpClient: NaverMapsHTTPClient = URLSessionNaverMapsHTTPClient()) {
+         httpClient: NaverMapsHTTPClient = URLSessionNaverMapsHTTPClient(),
+         roadDataSource: (any SpeedLimitDataSource)? = nil) {
         self.runner = NaverMapsRequestRunner(configuration: configuration, httpClient: httpClient)
+        self.roadDataSource = roadDataSource ?? (try? SQLiteSpeedLimitDataSource())
     }
 
     // MARK: 단일 경로
@@ -80,6 +85,54 @@ struct NaverDirectionsService: NaverDirectionsServicing {
             throw NaverMapsError.invalidRequest("경유지는 최대 \(Self.maxWaypointCount)개까지 지정할 수 있습니다.")
         }
 
+        // 지역 검색 좌표는 건물·관광지 중심점, GPS는 주차장·건물 내부일 수 있다.
+        // 임의의 반경 좌표는 실제 도로를 맞힌다는 보장이 없으므로 번들 도로 링크의
+        // 중심선에 정확히 스냅한 좌표를 후보로 사용한다.
+        async let snappedGoalsTask = roadCandidates(around: goal,
+                                                     withinMeters: 1_000,
+                                                     limit: 4,
+                                                     preferNonMotorways: true)
+        async let snappedStartsTask = roadCandidates(around: start,
+                                                      withinMeters: 500,
+                                                      limit: 4,
+                                                      preferNonMotorways: false)
+        let snappedGoals = await snappedGoalsTask
+        let snappedStarts = await snappedStartsTask
+
+        // 경북 도로 DB 밖의 장소도 검색되므로 전국 공통 폴백으로 주변 좌표를 단건 시도한다.
+        // 실제 진입 도로 후보 → 장소 원본 → 가까운 반경 순서다.
+        let fallbackGoals = Self.radialCandidates(around: goal, radiiMeters: [50, 120, 250])
+        let fallbackStarts = Self.radialCandidates(around: start, radiiMeters: [40, 100])
+        let goalCandidates = Self.uniqueCoordinates(snappedGoals + [goal] + fallbackGoals)
+        let startCandidates = Self.uniqueCoordinates([start] + snappedStarts + fallbackStarts)
+        let attempts = Self.routeAttempts(starts: startCandidates, goals: goalCandidates)
+
+        for attempt in attempts {
+            try Task.checkCancellation()
+            do {
+                return try await requestRoutes(from: attempt.start,
+                                               goal: attempt.goal,
+                                               originalGoal: goal,
+                                               waypoints: waypoints,
+                                               options: options)
+            } catch let error where Self.isOffRoadError(error) {
+                // 실제 API는 다중 목적지 중 하나만 도로 밖이어도 요청 전체를 code 2로 거절한다.
+                // 따라서 후보를 한 쿼리에 묶지 않고 다음 단건 조합을 시도한다.
+                continue
+            }
+        }
+
+        throw NaverMapsError.api(
+            code: "2",
+            message: "현재 위치 또는 선택한 장소 주변에서 차량이 진입할 수 있는 도로를 찾지 못했습니다."
+        )
+    }
+
+    private func requestRoutes(from start: NaverCoordinate,
+                               goal: NaverCoordinate,
+                               originalGoal: NaverCoordinate,
+                               waypoints: [NaverCoordinate],
+                               options: [RouteOption]) async throws -> [DrivingRoute] {
         var queryItems = [
             URLQueryItem(name: "start", value: start.apiQueryValue),
             URLQueryItem(name: "goal", value: goal.apiQueryValue),
@@ -93,10 +146,8 @@ struct NaverDirectionsService: NaverDirectionsServicing {
         let request = try runner.makeRequest(host: runner.configuration.directionsHost,
                                              path: runner.configuration.directionsPath,
                                              queryItems: queryItems)
-
         let dto = try await runner.send(request, as: NaverDirectionsResponseDTO.self)
 
-        // Directions 5 는 HTTP 200 이어도 code != 0 이면 실패다.
         guard dto.code == 0 else {
             throw NaverMapsError.api(code: String(dto.code),
                                      message: dto.message ?? "경로를 찾지 못했습니다.")
@@ -105,14 +156,131 @@ struct NaverDirectionsService: NaverDirectionsServicing {
             throw NaverMapsError.emptyResult
         }
 
-        // 요청한 옵션 순서를 유지해 돌려준다.
         let results: [DrivingRoute] = options.compactMap { option in
             guard let routeDTO = routeDictionary[option.rawValue]?.first else { return nil }
-            return Self.makeRoute(from: routeDTO, option: option, fallbackStart: start, fallbackGoal: goal)
+            return Self.makeRoute(from: routeDTO,
+                                  option: option,
+                                  fallbackStart: start,
+                                  fallbackGoal: originalGoal)
         }
 
         guard !results.isEmpty else { throw NaverMapsError.emptyResult }
         return results
+    }
+
+    /// 가장 가능성 높은 조합부터 시도한다. 실제 현위치 → 현위치의 도로 스냅 후보 순서다.
+    private static func routeAttempts(starts: [NaverCoordinate],
+                                      goals: [NaverCoordinate])
+    -> [(start: NaverCoordinate, goal: NaverCoordinate)] {
+        guard let originalStart = starts.first, let primaryGoal = goals.first else { return [] }
+
+        var attempts = [(start: originalStart, goal: primaryGoal)]
+        attempts += goals.dropFirst().map { (start: originalStart, goal: $0) }
+
+        // 출발지까지 보정해야 하는 경우에는 가능성 높은 목적지 후보 9개까지만 조합한다.
+        // 실제 현위치가 유효하면 위의 첫 묶음에서 이미 반환된다.
+        for snappedStart in starts.dropFirst() {
+            attempts += goals.prefix(9).map { (start: snappedStart, goal: $0) }
+        }
+        // 한 번의 사용자 선택이 과도한 API 호출로 이어지지 않도록 전체 재시도에 상한을 둔다.
+        return Array(attempts.prefix(40))
+    }
+
+    private static func uniqueCoordinates(_ coordinates: [NaverCoordinate]) -> [NaverCoordinate] {
+        var seen = Set<String>()
+        return coordinates.filter { coordinate in
+            let key = String(format: "%.6f,%.6f", coordinate.longitude, coordinate.latitude)
+            return seen.insert(key).inserted
+        }
+    }
+
+    /// 중심점에서 가까운 반경부터 8방향으로 만든 전국 공통 도로 탐색 후보.
+    /// 다중 목적지로 묶지 않고 `routeAttempts`에서 반드시 단건으로 요청한다.
+    private static func radialCandidates(around center: NaverCoordinate,
+                                         radiiMeters: [Double]) -> [NaverCoordinate] {
+        let metersPerLatitudeDegree = 111_320.0
+        let latitudeRadians = center.latitude * .pi / 180
+        let metersPerLongitudeDegree = max(1, metersPerLatitudeDegree * cos(latitudeRadians))
+
+        return radiiMeters.flatMap { radius in
+            stride(from: 0.0, to: 360.0, by: 45.0).map { bearing in
+                let radians = bearing * .pi / 180
+                let north = cos(radians) * radius
+                let east = sin(radians) * radius
+                return NaverCoordinate(
+                    latitude: center.latitude + north / metersPerLatitudeDegree,
+                    longitude: center.longitude + east / metersPerLongitudeDegree
+                )
+            }
+        }
+    }
+
+    /// 좌표 주변의 실제 도로 링크를 거리순으로 정렬하고 중심선 위 좌표로 스냅한다.
+    private func roadCandidates(around coordinate: NaverCoordinate,
+                                withinMeters: Double,
+                                limit: Int,
+                                preferNonMotorways: Bool) async -> [NaverCoordinate] {
+        guard let roadDataSource,
+              let links = try? await roadDataSource.links(around: coordinate,
+                                                           radiusMeters: withinMeters),
+              !links.isEmpty else {
+            return []
+        }
+
+        let projected = KoreaCoordinateConverter.project(coordinate)
+        let matches = links.compactMap { link -> (coordinate: NaverCoordinate,
+                                                  distance: Double,
+                                                  isMotorway: Bool)? in
+            guard let nearest = link.nearestPoint(to: projected),
+                  nearest.distance <= withinMeters else { return nil }
+            return (KoreaCoordinateConverter.unproject(nearest.snapped),
+                    nearest.distance,
+                    link.roadRank.isMotorway)
+        }
+        .sorted { lhs, rhs in
+            if preferNonMotorways, lhs.isMotorway != rhs.isMotorway {
+                return !lhs.isMotorway
+            }
+            return lhs.distance < rhs.distance
+        }
+
+        var seen = Set<String>()
+        return matches.compactMap { match in
+            // 같은 양방향 도로 링크가 동일한 중심선을 공유하는 경우 중복 후보를 제거한다.
+            let key = String(format: "%.6f,%.6f",
+                             match.coordinate.longitude,
+                             match.coordinate.latitude)
+            guard seen.insert(key).inserted else { return nil }
+            return match.coordinate
+        }
+        .prefix(max(0, limit))
+        .map { $0 }
+    }
+
+    private static func isOffRoadError(_ error: Error) -> Bool {
+        guard let error = error as? NaverMapsError else { return false }
+        switch error {
+        case .api(let code, _):
+            return code == "2"
+        case .httpStatus(let status, let body):
+            guard status == 400 else { return false }
+            if let data = body.data(using: .utf8),
+               let envelope = try? JSONDecoder().decode(DirectionsErrorEnvelope.self, from: data) {
+                return envelope.error?.code == 2
+            }
+            return body.contains("\"code\":2")
+        default:
+            return false
+        }
+    }
+
+    private struct DirectionsErrorEnvelope: Decodable {
+        var error: Detail?
+
+        struct Detail: Decodable {
+            var code: Int?
+            var message: String?
+        }
     }
 
     // MARK: - Mapping
