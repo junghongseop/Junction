@@ -28,6 +28,11 @@ enum AppConfig {
         "Naver_Map_API_Key_Secret"
     )
 
+    /// NAVER Cloud Platform NAVER API HUB 검색 API의 Client ID/Secret.
+    /// Maps 애플리케이션 키와는 서로 다른 자격 증명이다.
+    static let naverSearchClientID: String = infoValue("Naver_Search_Client_ID")
+    static let naverSearchClientSecret: String = infoValue("Naver_Search_Client_Secret")
+
     /// 지도를 표시할 웹 문서의 기준 URL.
     ///
     /// Web Dynamic Map 은 요청 도메인을 NCP 콘솔에 등록된 서비스 URL 과 대조한다.
@@ -42,6 +47,10 @@ enum AppConfig {
     /// 지도 표시용 키가 준비되었는지.
     static var hasNaverMapClientID: Bool {
         !naverMapClientID.isEmpty
+    }
+
+    static var hasNaverSearchCredentials: Bool {
+        !naverSearchClientID.isEmpty && !naverSearchClientSecret.isEmpty
     }
 
     // MARK: -

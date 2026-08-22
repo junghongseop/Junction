@@ -8,6 +8,10 @@
 	<string>$(Naver_Map_Client_ID)</string>
 	<key>Naver_Map_Client_Secret</key>
 	<string>$(Naver_Map_Client_Secret)</string>
+	<key>Naver_Search_Client_ID</key>
+	<string>$(Naver_Search_Client_ID)</string>
+	<key>Naver_Search_Client_Secret</key>
+	<string>$(Naver_Search_Client_Secret)</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>주행 중 경로 안내와 도착지 주변 주차/단속 정보를 제공하기 위해 위치를 사용합니다.</string>
 </dict>
