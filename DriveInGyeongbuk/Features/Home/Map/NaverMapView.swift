@@ -34,6 +34,8 @@ final class NaverMapController: ObservableObject {
     private var pendingCameraUpdate: (() -> Void)?
     private var routePath: NMFPath?
     private var endpointMarkers: [NMFMarker] = []
+    private var simulatedCurrentLocationCoordinate: NaverCoordinate?
+    private var simulatedCurrentLocationMarker: NMFMarker?
     private var simulatedVehicleMarker: NMFMarker?
     private var parkingRestrictionPaths: [NMFPath] = []
     private var parkingRestrictionMarkers: [NMFMarker] = []
@@ -57,6 +59,15 @@ final class NaverMapController: ObservableObject {
     /// 현위치 추적 모드로 되돌린다. (사용자가 지도를 끌면 SDK 가 알아서 `.normal` 로 내린다)
     func moveToCurrentLocation() {
         run { self.mapView?.positionMode = .direction }
+    }
+
+    /// 고정 데모 좌표를 실제 현위치처럼 표시한다.
+    func showSimulatedCurrentLocation(at coordinate: NaverCoordinate) {
+        simulatedCurrentLocationCoordinate = coordinate
+        run {
+            guard let mapView = self.mapView else { return }
+            self.renderSimulatedCurrentLocation(at: coordinate, on: mapView)
+        }
     }
 
     /// 주행 시작 시 현재 위치 가까이 확대한 뒤 진행 방향 추적을 켠다.
@@ -318,6 +329,9 @@ final class NaverMapController: ObservableObject {
         let queued = pendingCameraUpdate
         pendingCameraUpdate = nil
         queued?()
+        if let coordinate = simulatedCurrentLocationCoordinate {
+            renderSimulatedCurrentLocation(at: coordinate, on: mapView)
+        }
     }
 
     fileprivate func detach() {
@@ -355,6 +369,25 @@ final class NaverMapController: ObservableObject {
         parkingRestrictionMarkers = []
     }
 
+    private func renderSimulatedCurrentLocation(at coordinate: NaverCoordinate,
+                                                on mapView: NMFMapView) {
+        let position = NMGLatLng(lat: coordinate.latitude, lng: coordinate.longitude)
+        let marker: NMFMarker
+        if let existing = simulatedCurrentLocationMarker {
+            marker = existing
+        } else {
+            marker = NMFMarker(position: position)
+            marker.iconImage = NMFOverlayImage(image: Self.simulatedCurrentLocationImage)
+            marker.width = 26
+            marker.height = 26
+            marker.anchor = CGPoint(x: 0.5, y: 0.5)
+            marker.zIndex = 100
+            simulatedCurrentLocationMarker = marker
+        }
+        marker.position = position
+        marker.mapView = mapView
+    }
+
     private static let parkingRestrictionPointImage: UIImage = {
         let size = CGSize(width: 18, height: 18)
         return UIGraphicsImageRenderer(size: size).image { _ in
@@ -362,6 +395,20 @@ final class NaverMapController: ObservableObject {
             UIBezierPath(ovalIn: CGRect(origin: .zero, size: size)).fill()
             UIColor(red: 1, green: 132 / 255, blue: 118 / 255, alpha: 1).setFill()
             UIBezierPath(ovalIn: CGRect(x: 3, y: 3, width: 12, height: 12)).fill()
+        }
+    }()
+
+    /// 네이버 SDK의 현위치 점과 비슷하게 보이는 데모용 마커.
+    private static let simulatedCurrentLocationImage: UIImage = {
+        let size = CGSize(width: 26, height: 26)
+        return UIGraphicsImageRenderer(size: size).image { context in
+            context.cgContext.setShadow(offset: CGSize(width: 0, height: 1), blur: 3,
+                                        color: UIColor.black.withAlphaComponent(0.35).cgColor)
+            UIColor.white.setFill()
+            UIBezierPath(ovalIn: CGRect(x: 2, y: 2, width: 22, height: 22)).fill()
+            context.cgContext.setShadow(offset: .zero, blur: 0)
+            UIColor(red: 0, green: 122 / 255, blue: 1, alpha: 1).setFill()
+            UIBezierPath(ovalIn: CGRect(x: 6, y: 6, width: 14, height: 14)).fill()
         }
     }()
 

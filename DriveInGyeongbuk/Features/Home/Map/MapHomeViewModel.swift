@@ -18,7 +18,7 @@ final class MapHomeViewModel: ObservableObject {
     private static let fallbackZoom: Double = 9
     private static let focusZoom: Double = 15
     /// 이 거리 안에 들어오면 도착 임박 UI와 주정차 금지구역을 노출한다.
-    private static let destinationApproachDistanceMeters: Double = 300
+    private static let destinationApproachDistanceMeters: Double = 20
 
     // MARK: 입력
 
@@ -57,7 +57,9 @@ final class MapHomeViewModel: ObservableObject {
 
     /// 권한이 있을 때만 현위치 추적을 켠다. 권한 없이 켜면 SDK 가 빈 점을 들고 헛돈다.
     var isTrackingLocation: Bool {
-        authorization == .authorized && (destination == nil || isDriving)
+        !locationService.isSimulated
+            && authorization == .authorized
+            && (destination == nil || isDriving)
     }
 
     // MARK: 의존성
@@ -91,7 +93,7 @@ final class MapHomeViewModel: ObservableObject {
     /// 첫 좌표에서 한 번만 카메라를 옮긴다. 이후에는 SDK 의 추적 모드가 맡는다.
     private var hasCenteredOnUser = false
 
-    init(locationService: LocationServicing = LocationService(),
+    init(locationService: LocationServicing = makeDefaultLocationService(),
          directionsService: NaverDirectionsServicing = NaverDirectionsService(),
          routeSimulator: RouteLocationSimulating = RouteLocationSimulator(),
          speedLimitService: (any SpeedLimitServicing)? = try? SpeedLimitService(),
@@ -163,7 +165,11 @@ final class MapHomeViewModel: ObservableObject {
             return
         }
         map.focus(on: coordinate, zoom: Self.focusZoom)
-        map.moveToCurrentLocation()
+        if locationService.isSimulated {
+            map.showSimulatedCurrentLocation(at: coordinate)
+        } else {
+            map.moveToCurrentLocation()
+        }
     }
 
     /// 검색 화면에서 고른 목적지를 저장한다. 경로 요청은 미리보기 화면 진입 후 시작한다.
@@ -348,7 +354,7 @@ final class MapHomeViewModel: ObservableObject {
         if startsRecording {
             finishedDrive = nil
             driveRecorder.start(route: route,
-                                originName: nil,
+                                originName: locationService.isSimulated ? DemoDriveLocation.originName : nil,
                                 destinationName: destination?.displayTitle)
         }
         simulationState = nil
@@ -584,6 +590,9 @@ final class MapHomeViewModel: ObservableObject {
     private func centerOnUser(_ coordinate: NaverCoordinate) {
         hasCenteredOnUser = true
         map.focus(on: coordinate, zoom: Self.focusZoom, animated: false)
+        if locationService.isSimulated {
+            map.showSimulatedCurrentLocation(at: coordinate)
+        }
     }
 
     private static func message(for authorization: LocationAuthorization) -> String? {

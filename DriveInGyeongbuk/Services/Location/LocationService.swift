@@ -50,6 +50,8 @@ nonisolated struct LocationFix: Hashable {
 /// 테스트/목 교체를 위한 추상화.
 protocol LocationServicing: AnyObject {
     var authorization: LocationAuthorization { get }
+    /// 실제 기기 GPS 대신 데모 좌표를 쓰는 구현인지.
+    var isSimulated: Bool { get }
     /// 마지막으로 받은 좌표. 아직 한 번도 못 받았으면 `nil`.
     var lastCoordinate: NaverCoordinate? { get }
     /// 마지막 위치 갱신 원본(속도·방위·시각 포함). 주행 기록용.
@@ -60,6 +62,62 @@ protocol LocationServicing: AnyObject {
     func requestAuthorization()
     func startUpdating()
     func stopUpdating()
+}
+
+extension LocationServicing {
+    var isSimulated: Bool { false }
+}
+
+/// 데모 영상에서 쓸 고정 출발지와 목적지.
+///
+/// 영천공설시장에서 영천시청까지는 직선거리 약 1km다. 영천시청 주변에서는
+/// 운영 백엔드가 시청남길·삼산길·충효로·야사1길 금지구간을 반환한다.
+enum DemoDriveLocation {
+    static let originName = "영천공설시장"
+    static let originCoordinate = NaverCoordinate(latitude: 35.9645099,
+                                                  longitude: 128.9374072)
+    static let destinationName = "영천시청"
+
+    /// 자동 시연을 끄고 수동으로 점검해야 할 때는 Scheme launch argument 에
+    /// `--disable-auto-demo` 를 추가한다. 위치는 계속 고정 좌표를 쓰므로 같은 조건에서
+    /// 각 화면을 천천히 확인할 수 있다.
+    static var isAutomationEnabled: Bool {
+        isEnabled && !ProcessInfo.processInfo.arguments.contains("--disable-auto-demo")
+    }
+
+    static var isEnabled: Bool {
+#if DEBUG
+        true
+#else
+        false
+#endif
+    }
+}
+
+/// 디버그 데모에서 Core Location 대신 고정 좌표를 공급한다.
+/// Release 빌드는 아래 `makeDefaultLocationService()`에서 실제 `LocationService`를 쓴다.
+final class DemoLocationService: LocationServicing {
+    private(set) var authorization: LocationAuthorization = .authorized
+    let isSimulated = true
+    private(set) var lastCoordinate: NaverCoordinate?
+    private(set) var lastFix: LocationFix?
+    var onChange: (() -> Void)?
+
+    init(coordinate: NaverCoordinate = DemoDriveLocation.originCoordinate) {
+        lastCoordinate = coordinate
+    }
+
+    func requestAuthorization() {
+        onChange?()
+    }
+
+    func startUpdating() {}
+
+    func stopUpdating() {}
+}
+
+func makeDefaultLocationService() -> LocationServicing {
+    DemoDriveLocation.isEnabled ? DemoLocationService() : LocationService()
 }
 
 final class LocationService: NSObject, LocationServicing, CLLocationManagerDelegate {
