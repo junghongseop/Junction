@@ -161,7 +161,7 @@ final class NaverMapController: ObservableObject {
         run { self.removeParkingRestrictionOverlays() }
     }
 
-    /// P 버튼으로 경로를 바꿀 때 기존 경로를 흐리게 남기고 새 경로를 순서대로 그리면서
+    /// P 버튼으로 경로를 바꿀 때 기존 경로의 색상을 유지하고 새 경로를 순서대로 그리면서
     /// 전체 경로가 화면에 들어오도록 카메라를 부드럽게 이동한다.
     func showParkingRouteOverview(_ route: DrivingRoute) {
         run {
@@ -172,8 +172,6 @@ final class NaverMapController: ObservableObject {
             self.fadingRoutePath?.mapView = nil
 
             let previousPath = self.routePath
-            previousPath?.color = UIColor(red: 82 / 255, green: 97 / 255, blue: 122 / 255, alpha: 1)
-            previousPath?.outlineColor = UIColor(red: 14 / 255, green: 31 / 255, blue: 67 / 255, alpha: 1)
             self.fadingRoutePath = previousPath
 
             self.endpointMarkers.forEach { $0.mapView = nil }

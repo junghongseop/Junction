@@ -291,7 +291,7 @@ struct MapHomeView: View {
         if let parkingLot = viewModel.selectedParkingLot {
             VStack(spacing: 24) {
                 regularManeuverCard
-                parkingRecommendationBanner(name: parkingLot.name)
+                parkingRecommendationBanner(name: parkingLot.englishDisplayName)
             }
         } else if viewModel.isApproachingDestination {
             approachingDestinationHeader
@@ -303,7 +303,7 @@ struct MapHomeView: View {
     private var parkingRoutePreviewOverlay: some View {
         VStack {
             if let parkingLot = viewModel.selectedParkingLot {
-                parkingRecommendationBanner(name: parkingLot.name)
+                parkingRecommendationBanner(name: parkingLot.englishDisplayName)
                     .padding(.horizontal, 16)
                     .padding(.top, 20)
             }

@@ -26,6 +26,44 @@ nonisolated struct ParkingLot: Identifiable, Hashable {
     /// 주차장명 (예: "경상북도 포항시청 부설주차장").
     var name: String
     var coordinate: NaverCoordinate
+
+    /// 서버가 한글 이름만 내려주므로 주차장 유형은 영어로 번역하고 지명은 로마자로 표기한다.
+    var englishDisplayName: String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "Unnamed Parking Lot" }
+
+        var translated = trimmed
+        let parkingTerms = [
+            ("공영주차장", " Public Parking Lot "),
+            ("부설주차장", " Parking Lot "),
+            ("주차타워", " Parking Tower "),
+            ("주차장", " Parking Lot ")
+        ]
+        for (korean, english) in parkingTerms {
+            translated = translated.replacingOccurrences(of: korean, with: english)
+        }
+
+        if translated.containsHangul,
+           let latin = translated.applyingTransform(.toLatin, reverse: false)?
+            .applyingTransform(.stripDiacritics, reverse: false) {
+            translated = latin
+        }
+
+        return translated
+            .split(whereSeparator: \Character.isWhitespace)
+            .joined(separator: " ")
+            .capitalized(with: Locale(identifier: "en_US"))
+    }
+}
+
+private extension String {
+    var containsHangul: Bool {
+        unicodeScalars.contains { scalar in
+            (0xAC00...0xD7A3).contains(scalar.value)
+                || (0x1100...0x11FF).contains(scalar.value)
+                || (0x3130...0x318F).contains(scalar.value)
+        }
+    }
 }
 
 protocol ParkingAPIClientProtocol {
