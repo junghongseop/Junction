@@ -18,6 +18,8 @@
 		A90110A73039704400046CAA /* Exceptions for "DriveInGyeongbuk" folder in "DriveInGyeongbuk" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				Config/Config.xcconfig,
+				Config/Config.xcconfig.sample,
 				Info.plist,
 			);
 			target = A96417AF3039671D001FF543 /* DriveInGyeongbuk */;
@@ -277,6 +279,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = DriveInGyeongbuk/Info.plist;
@@ -309,6 +312,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = DriveInGyeongbuk/Info.plist;
