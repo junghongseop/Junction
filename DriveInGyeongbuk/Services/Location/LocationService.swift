@@ -107,3 +107,177 @@ final class LocationService: NSObject, LocationServicing, CLLocationManagerDeleg
         }
     }
 }
+
+// MARK: - Route simulation
+
+/// 앱 내부 주행 시뮬레이터가 내보내는 한 시점의 가짜 위치 상태.
+struct RouteSimulationState {
+    var coordinate: NaverCoordinate
+    var bearing: Double
+    var pathIndex: Int
+    var remainingDistance: Double
+    var remainingDuration: TimeInterval
+    var nextStep: RouteStep?
+    var distanceToNextStep: Double
+    var currentSpeedKPH: Int
+    var speedLimitKPH: Int?
+    var isFinished: Bool
+}
+
+protocol RouteLocationSimulating: AnyObject {
+    var onChange: ((RouteSimulationState) -> Void)? { get set }
+    func start(route: DrivingRoute,
+               maximumSpeedKilometersPerHour: Double,
+               speedLimitSegments: [RouteSpeedLimitSegment])
+    func stop()
+}
+
+/// 실제 GPS 대신 선택 경로 위를 일정 속도로 이동하는 좌표 공급자.
+final class RouteLocationSimulator: RouteLocationSimulating {
+    var onChange: ((RouteSimulationState) -> Void)?
+
+    private var timer: Timer?
+    private var route: DrivingRoute?
+    private var cumulativeDistances: [Double] = []
+    private var speedLimitSegments: [RouteSpeedLimitSegment] = []
+    private var traveledDistance: Double = 0
+    private var maximumSpeedKPH: Double = 0
+    private var lastTick: Date?
+
+    func start(route: DrivingRoute,
+               maximumSpeedKilometersPerHour: Double = 100,
+               speedLimitSegments: [RouteSpeedLimitSegment] = []) {
+        stop()
+        guard route.path.count >= 2 else { return }
+
+        self.route = route
+        maximumSpeedKPH = max(0, maximumSpeedKilometersPerHour)
+        self.speedLimitSegments = speedLimitSegments
+        cumulativeDistances = [0]
+        for index in 1..<route.path.count {
+            cumulativeDistances.append(cumulativeDistances[index - 1]
+                                       + route.path[index - 1].distance(to: route.path[index]))
+        }
+        traveledDistance = 0
+        lastTick = Date()
+        publishState()
+
+        timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            self?.tick()
+        }
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+        route = nil
+        cumulativeDistances = []
+        speedLimitSegments = []
+        traveledDistance = 0
+        lastTick = nil
+    }
+
+    private func tick() {
+        let now = Date()
+        let delta = min(0.5, now.timeIntervalSince(lastTick ?? now))
+        lastTick = now
+        traveledDistance += currentSpeedKPH(at: traveledDistance) / 3.6 * delta
+        publishState()
+    }
+
+    private func publishState() {
+        guard let route, let totalDistance = cumulativeDistances.last else { return }
+        traveledDistance = min(traveledDistance, totalDistance)
+
+        let segmentIndex = segment(containing: traveledDistance)
+        let start = route.path[segmentIndex]
+        let endIndex = min(segmentIndex + 1, route.path.count - 1)
+        let end = route.path[endIndex]
+        let segmentStart = cumulativeDistances[segmentIndex]
+        let segmentLength = max(0.001, cumulativeDistances[endIndex] - segmentStart)
+        let progress = min(1, max(0, (traveledDistance - segmentStart) / segmentLength))
+        let coordinate = NaverCoordinate(
+            latitude: start.latitude + (end.latitude - start.latitude) * progress,
+            longitude: start.longitude + (end.longitude - start.longitude) * progress
+        )
+        let remainingDistance = max(0, totalDistance - traveledDistance)
+        let speedLimit = reliableSpeedLimit(at: traveledDistance)
+        let currentSpeed = currentSpeedKPH(at: traveledDistance)
+        let nextStep = route.steps.first { $0.pointIndex > segmentIndex }
+        let nextStepDistance = nextStep.map {
+            max(0, cumulativeDistances[min($0.pointIndex, cumulativeDistances.count - 1)] - traveledDistance)
+        } ?? remainingDistance
+        let finished = traveledDistance >= totalDistance
+
+        onChange?(RouteSimulationState(
+            coordinate: coordinate,
+            bearing: Self.bearing(from: start, to: end),
+            pathIndex: segmentIndex,
+            remainingDistance: remainingDistance,
+            remainingDuration: remainingDuration(from: traveledDistance, totalDistance: totalDistance),
+            nextStep: nextStep,
+            distanceToNextStep: nextStepDistance,
+            currentSpeedKPH: Int(currentSpeed.rounded()),
+            speedLimitKPH: speedLimit,
+            isFinished: finished
+        ))
+
+        if finished { timer?.invalidate(); timer = nil }
+    }
+
+    private func segment(containing distance: Double) -> Int {
+        guard cumulativeDistances.count >= 2 else { return 0 }
+        var low = 0
+        var high = cumulativeDistances.count - 1
+        while low + 1 < high {
+            let middle = (low + high) / 2
+            if cumulativeDistances[middle] <= distance { low = middle } else { high = middle }
+        }
+        return min(low, cumulativeDistances.count - 2)
+    }
+
+    private func reliableSpeedLimit(at distance: Double) -> Int? {
+        speedLimitSegments.last {
+            $0.distanceFromStartMeters <= distance
+                && distance <= $0.endDistanceFromStartMeters
+                && $0.isReliableLimit
+        }?.limitKPH
+    }
+
+    private func currentSpeedKPH(at distance: Double) -> Double {
+        min(maximumSpeedKPH, Double(reliableSpeedLimit(at: distance) ?? Int(maximumSpeedKPH)))
+    }
+
+    private func remainingDuration(from distance: Double, totalDistance: Double) -> TimeInterval {
+        guard maximumSpeedKPH > 0 else { return 0 }
+        var cursor = distance
+        var duration: TimeInterval = 0
+
+        for segment in speedLimitSegments where segment.endDistanceFromStartMeters > cursor {
+            let segmentStart = max(cursor, segment.distanceFromStartMeters)
+            if segmentStart > cursor {
+                duration += (segmentStart - cursor) / (maximumSpeedKPH / 3.6)
+            }
+            let segmentEnd = min(totalDistance, segment.endDistanceFromStartMeters)
+            guard segmentEnd > segmentStart else { continue }
+            let limit = segment.isReliableLimit ? Double(segment.limitKPH ?? Int(maximumSpeedKPH)) : maximumSpeedKPH
+            duration += (segmentEnd - segmentStart) / (min(maximumSpeedKPH, limit) / 3.6)
+            cursor = segmentEnd
+            if cursor >= totalDistance { break }
+        }
+        if cursor < totalDistance {
+            duration += (totalDistance - cursor) / (maximumSpeedKPH / 3.6)
+        }
+        return duration
+    }
+
+    private static func bearing(from start: NaverCoordinate, to end: NaverCoordinate) -> Double {
+        let startLatitude = start.latitude * .pi / 180
+        let endLatitude = end.latitude * .pi / 180
+        let longitudeDelta = (end.longitude - start.longitude) * .pi / 180
+        let y = sin(longitudeDelta) * cos(endLatitude)
+        let x = cos(startLatitude) * sin(endLatitude)
+            - sin(startLatitude) * cos(endLatitude) * cos(longitudeDelta)
+        return (atan2(y, x) * 180 / .pi + 360).truncatingRemainder(dividingBy: 360)
+    }
+}

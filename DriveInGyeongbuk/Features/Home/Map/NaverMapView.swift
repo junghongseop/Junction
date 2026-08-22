@@ -34,6 +34,7 @@ final class NaverMapController: ObservableObject {
     private var pendingCameraUpdate: (() -> Void)?
     private var routePath: NMFPath?
     private var endpointMarkers: [NMFMarker] = []
+    private var simulatedVehicleMarker: NMFMarker?
 
     // MARK: 명령
 
@@ -66,6 +67,39 @@ final class NaverMapController: ObservableObject {
             update.animation = .easeIn
             mapView.moveCamera(update)
         }
+    }
+
+    /// 시뮬레이션 좌표에 차량 마커를 옮기고 카메라가 근거리에서 따라가게 한다.
+    func updateSimulatedVehicle(at coordinate: NaverCoordinate,
+                                bearing: Double,
+                                zoom: Double = 18.5) {
+        run {
+            guard let mapView = self.mapView else { return }
+            let position = NMGLatLng(lat: coordinate.latitude, lng: coordinate.longitude)
+            let marker: NMFMarker
+            if let existing = self.simulatedVehicleMarker {
+                marker = existing
+            } else {
+                marker = NMFMarker(position: position)
+                marker.iconImage = NMFOverlayImage(image: Self.simulatedVehicleImage)
+                marker.width = 44
+                marker.height = 58
+                marker.anchor = CGPoint(x: 0.5, y: 0.5)
+                marker.mapView = mapView
+                self.simulatedVehicleMarker = marker
+            }
+            marker.position = position
+            marker.angle = CGFloat(bearing)
+
+            let update = NMFCameraUpdate(scrollTo: position, zoomTo: zoom)
+            update.animation = .none
+            mapView.moveCamera(update)
+        }
+    }
+
+    func removeSimulatedVehicle() {
+        simulatedVehicleMarker?.mapView = nil
+        simulatedVehicleMarker = nil
     }
 
     /// 자동차 경로와 출발·도착 마커를 그리고, 하단 요약 카드 위로 전체 경로를 맞춘다.
@@ -155,6 +189,38 @@ final class NaverMapController: ObservableObject {
         endpointMarkers.forEach { $0.mapView = nil }
         endpointMarkers = []
     }
+
+    /// 외부 이미지 의존성 없이 그린 상단 시점 차량 아이콘.
+    private static let simulatedVehicleImage: UIImage = {
+        let size = CGSize(width: 44, height: 58)
+        return UIGraphicsImageRenderer(size: size).image { context in
+            let shadow = UIBezierPath(roundedRect: CGRect(x: 8, y: 3, width: 28, height: 52),
+                                      cornerRadius: 11)
+            UIColor.black.withAlphaComponent(0.35).setFill()
+            context.cgContext.setShadow(offset: CGSize(width: 0, height: 3), blur: 4)
+            shadow.fill()
+            context.cgContext.setShadow(offset: .zero, blur: 0)
+
+            let body = UIBezierPath(roundedRect: CGRect(x: 8, y: 2, width: 28, height: 52),
+                                    cornerRadius: 11)
+            UIColor(red: 0, green: 230 / 255, blue: 118 / 255, alpha: 1).setFill()
+            body.fill()
+
+            let windshield = UIBezierPath(roundedRect: CGRect(x: 12, y: 10, width: 20, height: 13),
+                                          cornerRadius: 5)
+            UIColor(red: 6 / 255, green: 14 / 255, blue: 32 / 255, alpha: 0.9).setFill()
+            windshield.fill()
+
+            let rearWindow = UIBezierPath(roundedRect: CGRect(x: 13, y: 35, width: 18, height: 9),
+                                          cornerRadius: 4)
+            UIColor(red: 6 / 255, green: 14 / 255, blue: 32 / 255, alpha: 0.75).setFill()
+            rearWindow.fill()
+
+            UIColor.white.withAlphaComponent(0.95).setFill()
+            UIBezierPath(ovalIn: CGRect(x: 11, y: 5, width: 5, height: 4)).fill()
+            UIBezierPath(ovalIn: CGRect(x: 28, y: 5, width: 5, height: 4)).fill()
+        }
+    }()
 }
 
 // MARK: - SwiftUI View

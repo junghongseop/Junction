@@ -35,6 +35,7 @@ final class MapHomeViewModel: ObservableObject {
     @Published private(set) var isRouteLoading = false
     @Published private(set) var routeErrorMessage: String?
     @Published private(set) var isDriving = false
+    @Published private(set) var simulationState: RouteSimulationState?
 
     /// 지도 조작용.
     let map = NaverMapController()
@@ -50,16 +51,26 @@ final class MapHomeViewModel: ObservableObject {
 
     private let locationService: LocationServicing
     private let directionsService: NaverDirectionsServicing
+    private let routeSimulator: RouteLocationSimulating
+    private let speedLimitService: (any SpeedLimitServicing)?
     private var routeRequestID: UUID?
+    private var simulationStartID: UUID?
     /// 첫 좌표에서 한 번만 카메라를 옮긴다. 이후에는 SDK 의 추적 모드가 맡는다.
     private var hasCenteredOnUser = false
 
     init(locationService: LocationServicing = LocationService(),
-         directionsService: NaverDirectionsServicing = NaverDirectionsService()) {
+         directionsService: NaverDirectionsServicing = NaverDirectionsService(),
+         routeSimulator: RouteLocationSimulating = RouteLocationSimulator(),
+         speedLimitService: (any SpeedLimitServicing)? = try? SpeedLimitService()) {
         self.locationService = locationService
         self.directionsService = directionsService
+        self.routeSimulator = routeSimulator
+        self.speedLimitService = speedLimitService
         self.locationService.onChange = { [weak self] in
             self?.handleLocationChange()
+        }
+        self.routeSimulator.onChange = { [weak self] state in
+            self?.handleSimulationChange(state)
         }
         authorization = locationService.authorization
     }
@@ -89,7 +100,10 @@ final class MapHomeViewModel: ObservableObject {
     }
 
     func onDisappear() {
+        simulationStartID = nil
         locationService.stopUpdating()
+        routeSimulator.stop()
+        routeMap.removeSimulatedVehicle()
     }
 
     /// 현위치 버튼(또는 권한 허용 직후) — 카메라를 사용자 위치로 되돌린다.
@@ -104,6 +118,9 @@ final class MapHomeViewModel: ObservableObject {
 
     /// 검색 화면에서 고른 목적지를 저장한다. 경로 요청은 미리보기 화면 진입 후 시작한다.
     func prepareDestination(_ location: NaverLocation) {
+        simulationStartID = nil
+        routeSimulator.stop()
+        routeMap.removeSimulatedVehicle()
         routeRequestID = nil
         searchText = location.displayTitle
         destination = location
@@ -112,6 +129,7 @@ final class MapHomeViewModel: ObservableObject {
         routeErrorMessage = nil
         isRouteLoading = false
         isDriving = false
+        simulationState = nil
         selectedRouteOption = .fastest
     }
 
@@ -121,13 +139,18 @@ final class MapHomeViewModel: ObservableObject {
 
     /// 경로 화면에서 검색 화면으로 돌아갈 때 검색어·목적지는 유지하고 화면 작업만 멈춘다.
     func leaveRoutePreview() {
+        simulationStartID = nil
         routeRequestID = nil
         isRouteLoading = false
         isDriving = false
+        simulationState = nil
+        routeSimulator.stop()
+        routeMap.removeSimulatedVehicle()
         routeMap.clear()
     }
 
     func clearDestination() {
+        simulationStartID = nil
         routeRequestID = nil
         destination = nil
         route = nil
@@ -135,6 +158,9 @@ final class MapHomeViewModel: ObservableObject {
         routeErrorMessage = nil
         isRouteLoading = false
         isDriving = false
+        simulationState = nil
+        routeSimulator.stop()
+        routeMap.removeSimulatedVehicle()
         searchText = ""
         routeMap.clear()
         recenterOnUser()
@@ -148,16 +174,29 @@ final class MapHomeViewModel: ObservableObject {
 
     func startDriving() {
         guard let selectedRoute else { return }
+        let startID = UUID()
+        simulationStartID = startID
         isDriving = true
+        simulationState = nil
         routeMap.showRoute(selectedRoute, fitsRoute: false, showsEndpoints: false)
-        if let currentLocation = locationService.lastCoordinate {
-            routeMap.startNavigation(at: currentLocation)
-        } else {
-            routeMap.moveToCurrentLocation()
+        Task {
+            var speedSegments: [RouteSpeedLimitSegment] = []
+            if let speedLimitService {
+                try? await speedLimitService.prepare(for: selectedRoute)
+                speedSegments = speedLimitService.routeSegments
+            }
+            guard isDriving, simulationStartID == startID else { return }
+            routeSimulator.start(route: selectedRoute,
+                                 maximumSpeedKilometersPerHour: 100,
+                                 speedLimitSegments: speedSegments)
         }
     }
 
     func finishDriving() {
+        simulationStartID = nil
+        routeSimulator.stop()
+        routeMap.removeSimulatedVehicle()
+        simulationState = nil
         isDriving = false
         if let selectedRoute { routeMap.showRoute(selectedRoute) }
     }
@@ -165,6 +204,15 @@ final class MapHomeViewModel: ObservableObject {
     var selectedRoute: DrivingRoute? {
         route(for: selectedRouteOption) ?? route
     }
+
+    var currentInstruction: RouteStep? { simulationState?.nextStep }
+    var distanceToNextInstruction: Double { simulationState?.distanceToNextStep ?? 0 }
+    var remainingDistance: Double { simulationState?.remainingDistance ?? Double(selectedRoute?.distance ?? 0) }
+    var simulatedArrivalDate: Date {
+        Date().addingTimeInterval(simulationState?.remainingDuration ?? 0)
+    }
+    var simulatedSpeedKPH: Int { simulationState?.currentSpeedKPH ?? 0 }
+    var simulatedSpeedLimitKPH: Int? { simulationState?.speedLimitKPH }
 
     private func route(for option: RouteOption) -> DrivingRoute? {
         switch option {
@@ -186,6 +234,12 @@ final class MapHomeViewModel: ObservableObject {
 
         guard !hasCenteredOnUser, let coordinate = locationService.lastCoordinate else { return }
         centerOnUser(coordinate)
+    }
+
+    private func handleSimulationChange(_ state: RouteSimulationState) {
+        simulationState = state
+        routeMap.updateSimulatedVehicle(at: state.coordinate, bearing: state.bearing)
+        if state.isFinished { finishDriving() }
     }
 
     private func loadRoute() async {

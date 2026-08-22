@@ -124,8 +124,7 @@ struct MapHomeView: View {
     private var routePreview: some View {
         ZStack {
             NaverMapView(controller: viewModel.routeMap,
-                         positionMode: viewModel.isDriving ? .direction : .disabled,
-                         navigationZoom: viewModel.isDriving ? 18.5 : nil,
+                         positionMode: .disabled,
                          isNightMode: colorScheme == .dark,
                          logoMargin: UIEdgeInsets(top: 0, left: 12, bottom: 390, right: 0))
                 .ignoresSafeArea()
@@ -189,6 +188,7 @@ struct MapHomeView: View {
 
             HStack(alignment: .bottom) {
                 VStack(spacing: 16) {
+                    simulationSpeedBadge
                     driveCircleButton(systemName: isVoiceGuidanceMuted ? "speaker.slash.fill" : "speaker.wave.2.fill") {
                         isVoiceGuidanceMuted.toggle()
                     }
@@ -228,7 +228,7 @@ struct MapHomeView: View {
     }
 
     private var maneuverCard: some View {
-        let step = viewModel.selectedRoute?.steps.first { $0.kind != .departure }
+        let step = viewModel.currentInstruction
         return VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 16) {
                 Image(systemName: step?.kind.symbolName ?? "arrow.up")
@@ -237,7 +237,7 @@ struct MapHomeView: View {
                     .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 16))
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(step?.distanceDescription ?? "Start")
+                    Text(simulationDistanceToInstruction)
                         .font(.system(size: 40, weight: .heavy))
                     Text(step?.instructionTitle ?? "Follow the route")
                         .font(.system(size: 22, weight: .bold))
@@ -264,9 +264,9 @@ struct MapHomeView: View {
                 .font(.system(size: 30, weight: .bold))
             Text("ETA").font(.system(size: 18, weight: .medium))
             Spacer()
-            Text(viewModel.selectedRoute?.distanceValue ?? "–")
+            Text(simulationRemainingDistance.value)
                 .font(.system(size: 30, weight: .bold))
-            Text(viewModel.selectedRoute?.distanceUnit ?? "km")
+            Text(simulationRemainingDistance.unit)
                 .font(.system(size: 18, weight: .medium))
         }
         .foregroundStyle(Color(red: 179 / 255, green: 197 / 255, blue: 1))
@@ -278,7 +278,22 @@ struct MapHomeView: View {
     }
 
     private var estimatedArrival: Date {
-        Date().addingTimeInterval(TimeInterval(viewModel.selectedRoute?.duration ?? 0))
+        viewModel.simulatedArrivalDate
+    }
+
+    private var simulationDistanceToInstruction: String {
+        formattedDistance(viewModel.distanceToNextInstruction).value
+            + formattedDistance(viewModel.distanceToNextInstruction).unit
+    }
+
+    private var simulationRemainingDistance: (value: String, unit: String) {
+        formattedDistance(viewModel.remainingDistance)
+    }
+
+    private func formattedDistance(_ distance: Double) -> (value: String, unit: String) {
+        distance >= 1000
+            ? (String(format: "%.1f", distance / 1000), "km")
+            : (String(Int(max(0, distance).rounded())), "m")
     }
 
     private func driveCircleButton(systemName: String, action: @escaping () -> Void) -> some View {
@@ -290,6 +305,29 @@ struct MapHomeView: View {
                 .overlay(Circle().stroke(Color.white.opacity(0.2)))
         }
         .buttonStyle(.plain)
+    }
+
+    private var simulationSpeedBadge: some View {
+        VStack(spacing: 4) {
+            ZStack {
+                Circle()
+                    .fill(.white)
+                    .overlay(Circle().stroke(.red, lineWidth: 4))
+                Text(viewModel.simulatedSpeedLimitKPH.map(String.init) ?? "–")
+                    .font(.system(size: 19, weight: .heavy))
+                    .foregroundStyle(.black)
+            }
+            .frame(width: 56, height: 56)
+
+            Text("\(viewModel.simulatedSpeedKPH) km/h")
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 4)
+                .background(.black.opacity(0.65), in: .capsule)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Speed \(viewModel.simulatedSpeedKPH) kilometers per hour")
     }
 
     private func locationStatus(_ message: String) -> some View {
