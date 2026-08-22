@@ -104,7 +104,7 @@ final class MapHomeViewModel: ObservableObject {
     /// 검색 화면에서 고른 목적지를 저장한다. 경로 요청은 미리보기 화면 진입 후 시작한다.
     func prepareDestination(_ location: NaverLocation) {
         routeRequestID = nil
-        searchText = location.title
+        searchText = location.displayTitle
         destination = location
         route = nil
         safeRoute = nil

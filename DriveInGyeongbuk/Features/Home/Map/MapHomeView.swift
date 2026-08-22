@@ -139,8 +139,7 @@ struct MapHomeView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbarVisibility(.visible, for: .navigationBar)
         .toolbarVisibility(.hidden, for: .tabBar)
-        .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
-        .toolbarBackground(.visible, for: .navigationBar)
+        .toolbarBackground(.hidden, for: .navigationBar)
         .task(id: viewModel.destination?.id) {
             guard viewModel.route == nil, !viewModel.isRouteLoading else { return }
             await viewModel.retryRoute()

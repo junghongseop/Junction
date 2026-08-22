@@ -11,19 +11,36 @@
 
 import Foundation
 
+enum NaverGeocodingLanguage: String {
+    case korean = "kor"
+    case english = "eng"
+}
+
 protocol NaverGeocodingServicing {
     /// 주소·장소 문자열을 좌표로 변환한다.
     /// - Parameters:
     ///   - query: 검색할 주소 (예: "경상북도 경주시 불국로 385")
     ///   - coordinate: 있으면 이 좌표에 가까운 결과가 우선 정렬된다.
     ///   - limit: 최대 결과 수 (1...100)
-    func geocode(query: String, near coordinate: NaverCoordinate?, limit: Int) async throws -> [GeocodedPlace]
+    func geocode(query: String,
+                 near coordinate: NaverCoordinate?,
+                 limit: Int,
+                 language: NaverGeocodingLanguage) async throws -> [GeocodedPlace]
 
     /// 좌표를 주소로 변환한다.
     func reverseGeocode(coordinate: NaverCoordinate) async throws -> ReverseGeocodedAddress
 }
 
 extension NaverGeocodingServicing {
+    func geocode(query: String,
+                 near coordinate: NaverCoordinate?,
+                 limit: Int) async throws -> [GeocodedPlace] {
+        try await geocode(query: query,
+                          near: coordinate,
+                          limit: limit,
+                          language: .korean)
+    }
+
     func geocode(query: String) async throws -> [GeocodedPlace] {
         try await geocode(query: query, near: nil, limit: 10)
     }
@@ -51,7 +68,8 @@ struct NaverGeocodingService: NaverGeocodingServicing {
 
     func geocode(query: String,
                  near coordinate: NaverCoordinate? = nil,
-                 limit: Int = 10) async throws -> [GeocodedPlace] {
+                 limit: Int = 10,
+                 language: NaverGeocodingLanguage = .korean) async throws -> [GeocodedPlace] {
 
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -60,7 +78,8 @@ struct NaverGeocodingService: NaverGeocodingServicing {
 
         var queryItems = [
             URLQueryItem(name: "query", value: trimmed),
-            URLQueryItem(name: "count", value: String(min(max(limit, 1), 100)))
+            URLQueryItem(name: "count", value: String(min(max(limit, 1), 100))),
+            URLQueryItem(name: "language", value: language.rawValue)
         ]
         if let coordinate {
             queryItems.append(URLQueryItem(name: "coordinate", value: coordinate.apiQueryValue))

@@ -151,12 +151,12 @@ struct SearchView: View {
                     .background(Self.panel, in: Circle())
 
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(location.title)
+                    Text(location.displayTitle)
                         .font(.body.weight(.bold))
                         .foregroundStyle(Self.primaryText)
                         .lineLimit(1)
 
-                    Text(location.displayAddress.isEmpty ? location.category : location.displayAddress)
+                    Text(location.displayAddress.isEmpty ? location.displayCategory : location.displayAddress)
                         .font(.callout)
                         .foregroundStyle(Self.secondaryText)
                         .lineLimit(1)
