@@ -39,11 +39,9 @@ struct RouteSummaryCard: View {
 
             HStack(spacing: 11) {
                 metricCard(title: "Hi-Pass",
-                           route: route,
-                           color: Self.green)
+                           route: route)
                 metricCard(title: "Safe Path",
-                           route: safeRoute ?? route,
-                           color: Self.accentText)
+                           route: safeRoute ?? route)
             }
 
             Button(action: onStart) {
@@ -75,8 +73,7 @@ struct RouteSummaryCard: View {
     }
 
     private func metricCard(title: String,
-                            route: DrivingRoute,
-                            color: Color) -> some View {
+                            route: DrivingRoute) -> some View {
         Button {
             onSelect(route.option)
         } label: {
@@ -91,7 +88,9 @@ struct RouteSummaryCard: View {
                         .font(.callout.weight(.bold))
                 }
             }
-            .foregroundStyle(color)
+            .foregroundStyle(selectedOption == route.option
+                             ? Self.green
+                             : Self.primaryText.opacity(0.55))
             .frame(maxWidth: .infinity)
             .frame(height: 107)
             .background(Color(red: 34 / 255, green: 42 / 255, blue: 61 / 255),
