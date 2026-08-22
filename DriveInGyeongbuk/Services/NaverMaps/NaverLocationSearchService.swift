@@ -21,7 +21,6 @@ extension NaverLocationSearchServicing {
 struct NaverLocation: Identifiable, Hashable {
     var id: String { "\(title)|\(coordinate.apiQueryValue)" }
     var title: String
-    var englishTitle: String
     var category: String
     var description: String
     var roadAddress: String
@@ -31,7 +30,7 @@ struct NaverLocation: Identifiable, Hashable {
     var link: URL?
 
     var displayTitle: String {
-        (englishTitle.nilIfBlank ?? title).romanizedForEnglishDisplay
+        title
     }
 
     var displayCategory: String {
@@ -154,13 +153,10 @@ struct NaverLocationSearchService: NaverLocationSearchServicing {
 
         var locations = dto.items.compactMap(Self.makeLocation)
         guard !locations.isEmpty else { throw NaverLocationSearchError.emptyResult }
-        let englishQueryTitle = query.englishSearchTitle
 
         // 지역 검색 API에는 응답 언어 옵션이 없다. 같은 네이버 Maps Geocoding API를
-        // 영어 모드로 호출해 장소명과 주소를 보강하고, 보강 실패 시에는 로마자 표기를 쓴다.
+        // 영어 모드로 호출해 주소를 보강하고, 보강 실패 시에는 로마자 주소를 쓴다.
         for index in locations.indices {
-            locations[index].englishTitle = englishQueryTitle
-                ?? locations[index].title.romanizedForEnglishDisplay
             let query = locations[index].roadAddress.isEmpty
                 ? locations[index].jibunAddress
                 : locations[index].roadAddress
@@ -172,10 +168,6 @@ struct NaverLocationSearchService: NaverLocationSearchServicing {
                     language: .english
                   ).first else { continue }
 
-            let geocodedTitle = englishPlace.placeName?.nilIfBlank
-            if let geocodedTitle, !geocodedTitle.containsHangul {
-                locations[index].englishTitle = geocodedTitle
-            }
             locations[index].englishAddress = [
                 englishPlace.roadAddress,
                 englishPlace.englishAddress,
@@ -198,7 +190,6 @@ struct NaverLocationSearchService: NaverLocationSearchServicing {
               (-180...180).contains(coordinate.longitude) else { return nil }
 
         return NaverLocation(title: item.title.removingHTMLTags,
-                             englishTitle: "",
                              category: item.category.removingHTMLTags,
                              description: item.description.removingHTMLTags,
                              roadAddress: item.roadAddress,
@@ -246,14 +237,6 @@ private extension String {
                 || (0x1100...0x11FF).contains(scalar.value)
                 || (0x3130...0x318F).contains(scalar.value)
         }
-    }
-
-    var englishSearchTitle: String? {
-        guard !containsHangul,
-              unicodeScalars.contains(where: {
-                  (0x41...0x5A).contains($0.value) || (0x61...0x7A).contains($0.value)
-              }) else { return nil }
-        return nilIfBlank
     }
 
     var nilIfBlank: String? {
