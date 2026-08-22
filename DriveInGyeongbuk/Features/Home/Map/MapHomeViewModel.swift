@@ -18,7 +18,7 @@ final class MapHomeViewModel: ObservableObject {
     private static let fallbackZoom: Double = 9
     private static let focusZoom: Double = 15
     /// 이 거리 안에 들어왔을 때만 주행 종료 버튼을 노출한다.
-    private static let finishButtonVisibilityDistanceMeters: Double = 1_000
+    private static let finishButtonVisibilityDistanceMeters: Double = 300
 
     // MARK: 입력
 
