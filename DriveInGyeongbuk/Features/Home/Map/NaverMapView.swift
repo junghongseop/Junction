@@ -34,6 +34,7 @@ final class NaverMapController: ObservableObject {
     private var pendingCameraUpdate: (() -> Void)?
     private var routePath: NMFPath?
     private var endpointMarkers: [NMFMarker] = []
+    private var simulatedVehicleMarker: NMFMarker?
 
     // MARK: 명령
 
@@ -66,6 +67,53 @@ final class NaverMapController: ObservableObject {
             update.animation = .easeIn
             mapView.moveCamera(update)
         }
+    }
+
+    /// 시뮬레이션 좌표에 차량 마커를 옮기고 카메라가 근거리에서 따라가게 한다.
+    func updateSimulatedVehicle(at coordinate: NaverCoordinate,
+                                bearing: Double,
+                                remainingPath: [NaverCoordinate],
+                                zoom: Double = 18.5) {
+        run {
+            guard let mapView = self.mapView else { return }
+            let position = NMGLatLng(lat: coordinate.latitude, lng: coordinate.longitude)
+            let marker: NMFMarker
+            if let existing = self.simulatedVehicleMarker {
+                marker = existing
+            } else {
+                marker = NMFMarker(position: position)
+                marker.iconImage = NMFOverlayImage(image: Self.simulatedVehicleImage)
+                marker.width = 52
+                marker.height = 52
+                marker.anchor = CGPoint(x: 0.5, y: 0.5)
+                marker.mapView = mapView
+                self.simulatedVehicleMarker = marker
+            }
+            marker.position = position
+            // 지도 카메라가 진행 방향으로 회전하므로 마커는 항상 화면 위를 향한다.
+            marker.angle = 0
+
+            if remainingPath.count >= 2 {
+                let points = remainingPath.map {
+                    NMGLatLng(lat: $0.latitude, lng: $0.longitude)
+                }
+                self.routePath?.path = NMGLineString(points: points)
+            }
+
+            let params = NMFCameraUpdateParams()
+            params.scroll(to: position)
+            params.zoom(to: zoom)
+            params.rotate(to: bearing)
+            let update = NMFCameraUpdate(params: params)
+            update.pivot = CGPoint(x: 0.5, y: 0.62)
+            update.animation = .none
+            mapView.moveCamera(update)
+        }
+    }
+
+    func removeSimulatedVehicle() {
+        simulatedVehicleMarker?.mapView = nil
+        simulatedVehicleMarker = nil
     }
 
     /// 자동차 경로와 출발·도착 마커를 그리고, 하단 요약 카드 위로 전체 경로를 맞춘다.
@@ -155,6 +203,30 @@ final class NaverMapController: ObservableObject {
         endpointMarkers.forEach { $0.mapView = nil }
         endpointMarkers = []
     }
+
+    /// 외부 이미지 의존성 없이 그린 상단 시점 차량 아이콘.
+    private static let simulatedVehicleImage: UIImage = {
+        let size = CGSize(width: 52, height: 52)
+        return UIGraphicsImageRenderer(size: size).image { context in
+            let shadow = UIBezierPath(ovalIn: CGRect(x: 3, y: 3, width: 46, height: 46))
+            UIColor.black.withAlphaComponent(0.35).setFill()
+            context.cgContext.setShadow(offset: CGSize(width: 0, height: 3), blur: 4)
+            shadow.fill()
+            context.cgContext.setShadow(offset: .zero, blur: 0)
+
+            UIColor.white.setFill()
+            UIBezierPath(ovalIn: CGRect(x: 3, y: 2, width: 46, height: 46)).fill()
+
+            let arrow = UIBezierPath()
+            arrow.move(to: CGPoint(x: 26, y: 8))
+            arrow.addLine(to: CGPoint(x: 39, y: 39))
+            arrow.addLine(to: CGPoint(x: 26, y: 32))
+            arrow.addLine(to: CGPoint(x: 13, y: 39))
+            arrow.close()
+            UIColor(red: 0, green: 82 / 255, blue: 212 / 255, alpha: 1).setFill()
+            arrow.fill()
+        }
+    }()
 }
 
 // MARK: - SwiftUI View
