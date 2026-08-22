@@ -64,3 +64,8 @@ fastlane/test_output
 .DS_Store
 
 **/Config/Config.xcconfig
+
+# Local data folder (brackets escaped: they are glob characters)
+\[2026-08-12\]NODELINKDATA/
+
+.omc/
