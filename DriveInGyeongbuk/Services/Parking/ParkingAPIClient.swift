@@ -6,7 +6,8 @@
 //
 //  데이터 출처
 //    GET https://junction-server.onrender.com/api/v1/parking-lots?latitude=&longitude=
-//    → 목적지 반경 2km 안에서 현재 운영 중인 경상북도 주차장을 거리순으로 준다.
+//    → 현재 서버는 목적지에서 가장 가까운 주차장 한 곳을 객체로 준다.
+//      구버전의 배열 응답도 계속 디코딩해 앱/서버 배포 순서가 달라도 동작하게 한다.
 //
 //  ⚠️ 서버가 주는 필드는 **주차장명 · 위도 · 경도 세 개뿐**이다.
 //     요금 / 주차 면수 / 운영 시간 / 전화번호는 응답에 없어서 모델에도 두지 않았다.
@@ -25,6 +26,44 @@ nonisolated struct ParkingLot: Identifiable, Hashable {
     /// 주차장명 (예: "경상북도 포항시청 부설주차장").
     var name: String
     var coordinate: NaverCoordinate
+
+    /// 서버가 한글 이름만 내려주므로 주차장 유형은 영어로 번역하고 지명은 로마자로 표기한다.
+    var englishDisplayName: String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "Unnamed Parking Lot" }
+
+        var translated = trimmed
+        let parkingTerms = [
+            ("공영주차장", " Public Parking Lot "),
+            ("부설주차장", " Parking Lot "),
+            ("주차타워", " Parking Tower "),
+            ("주차장", " Parking Lot ")
+        ]
+        for (korean, english) in parkingTerms {
+            translated = translated.replacingOccurrences(of: korean, with: english)
+        }
+
+        if translated.containsHangul,
+           let latin = translated.applyingTransform(.toLatin, reverse: false)?
+            .applyingTransform(.stripDiacritics, reverse: false) {
+            translated = latin
+        }
+
+        return translated
+            .split(whereSeparator: \Character.isWhitespace)
+            .joined(separator: " ")
+            .capitalized(with: Locale(identifier: "en_US"))
+    }
+}
+
+private extension String {
+    var containsHangul: Bool {
+        unicodeScalars.contains { scalar in
+            (0xAC00...0xD7A3).contains(scalar.value)
+                || (0x1100...0x11FF).contains(scalar.value)
+                || (0x3130...0x318F).contains(scalar.value)
+        }
+    }
 }
 
 protocol ParkingAPIClientProtocol {
@@ -60,9 +99,11 @@ struct ParkingAPIClient: ParkingAPIClientProtocol {
     // MARK: - Mapping
 
     private static func makeLot(from dto: ParkingLotsResponseDTO.ParkingLotDTO) -> ParkingLot? {
-        // 위/경도가 숫자가 아니라 **문자열**로 내려온다.
-        guard let latitude = Double(dto.latitude.trimmingCharacters(in: .whitespaces)),
-              let longitude = Double(dto.longitude.trimmingCharacters(in: .whitespaces)) else {
+        // 현재 서버는 문자열로 주지만 숫자로 바뀌어도 DTO가 문자열로 정규화한다.
+        guard let latitudeText = dto.latitude,
+              let longitudeText = dto.longitude,
+              let latitude = Double(latitudeText.trimmingCharacters(in: .whitespaces)),
+              let longitude = Double(longitudeText.trimmingCharacters(in: .whitespaces)) else {
             return nil
         }
 
@@ -78,11 +119,52 @@ struct ParkingAPIClient: ParkingAPIClientProtocol {
 struct ParkingLotsResponseDTO: Decodable {
     var parking: [ParkingLotDTO]
 
+    private enum CodingKeys: String, CodingKey {
+        case parking
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        if try container.decodeNil(forKey: .parking) {
+            parking = []
+        } else if let lots = try? container.decode([ParkingLotDTO].self, forKey: .parking) {
+            parking = lots
+        } else {
+            // 현재 운영 서버 응답: { "parking": { ... } }
+            parking = [try container.decode(ParkingLotDTO.self, forKey: .parking)]
+        }
+    }
+
     struct ParkingLotDTO: Decodable {
         var name: String
-        /// WGS84 위도 **문자열**.
-        var latitude: String
-        /// WGS84 경도 **문자열**.
-        var longitude: String
+        /// WGS84 위도. 문자열/JSON 숫자를 모두 받아 문자열로 정규화한다.
+        var latitude: String?
+        /// WGS84 경도. 문자열/JSON 숫자를 모두 받아 문자열로 정규화한다.
+        var longitude: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case name, latitude, longitude
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            name = (try? container.decode(String.self, forKey: .name)) ?? ""
+            latitude = Self.coordinateText(for: .latitude, in: container)
+            longitude = Self.coordinateText(for: .longitude, in: container)
+        }
+
+        private static func coordinateText(
+            for key: CodingKeys,
+            in container: KeyedDecodingContainer<CodingKeys>
+        ) -> String? {
+            if let text = try? container.decode(String.self, forKey: key) {
+                return text
+            }
+            if let number = try? container.decode(Double.self, forKey: key) {
+                return String(number)
+            }
+            return nil
+        }
     }
 }

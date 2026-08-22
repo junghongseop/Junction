@@ -17,8 +17,8 @@ final class MapHomeViewModel: ObservableObject {
     /// 도 전체가 들어오는 정도의 축척. 현재 위치를 잡으면 `focusZoom` 으로 당긴다.
     private static let fallbackZoom: Double = 9
     private static let focusZoom: Double = 15
-    /// 이 거리 안에 들어왔을 때만 주행 종료 버튼을 노출한다.
-    private static let finishButtonVisibilityDistanceMeters: Double = 300
+    /// 이 거리 안에 들어오면 도착 임박 UI와 주정차 금지구역을 노출한다.
+    private static let destinationApproachDistanceMeters: Double = 300
 
     // MARK: 입력
 
@@ -38,6 +38,14 @@ final class MapHomeViewModel: ObservableObject {
     @Published private(set) var routeErrorMessage: String?
     @Published private(set) var isDriving = false
     @Published private(set) var simulationState: RouteSimulationState?
+    @Published private(set) var isApproachingDestination = false
+    @Published private(set) var parkingRestrictions: [EnforcementZone] = []
+    @Published private(set) var isParkingRestrictionsLoading = false
+    @Published private(set) var parkingRestrictionErrorMessage: String?
+    @Published private(set) var isParkingRouteLoading = false
+    @Published private(set) var isPreviewingParkingRoute = false
+    @Published private(set) var parkingRouteErrorMessage: String?
+    @Published private(set) var selectedParkingLot: ParkingLot?
 
     /// 지도 조작용.
     let map = NaverMapController()
@@ -55,19 +63,28 @@ final class MapHomeViewModel: ObservableObject {
     private let directionsService: NaverDirectionsServicing
     private let routeSimulator: RouteLocationSimulating
     private let speedLimitService: (any SpeedLimitServicing)?
+    private let parkingService: ParkingServicing
+    private let enforcementService: EnforcementServicing
     private var routeRequestID: UUID?
     private var simulationStartID: UUID?
+    private var parkingRestrictionRequestID: UUID?
+    private var parkingRouteRequestID: UUID?
+    private var restrictionDestinationID: String?
     /// 첫 좌표에서 한 번만 카메라를 옮긴다. 이후에는 SDK 의 추적 모드가 맡는다.
     private var hasCenteredOnUser = false
 
     init(locationService: LocationServicing = LocationService(),
          directionsService: NaverDirectionsServicing = NaverDirectionsService(),
          routeSimulator: RouteLocationSimulating = RouteLocationSimulator(),
-         speedLimitService: (any SpeedLimitServicing)? = try? SpeedLimitService()) {
+         speedLimitService: (any SpeedLimitServicing)? = try? SpeedLimitService(),
+         parkingService: ParkingServicing = ParkingService(),
+         enforcementService: EnforcementServicing = EnforcementService()) {
         self.locationService = locationService
         self.directionsService = directionsService
         self.routeSimulator = routeSimulator
         self.speedLimitService = speedLimitService
+        self.parkingService = parkingService
+        self.enforcementService = enforcementService
         self.locationService.onChange = { [weak self] in
             self?.handleLocationChange()
         }
@@ -103,6 +120,9 @@ final class MapHomeViewModel: ObservableObject {
 
     func onDisappear() {
         simulationStartID = nil
+        parkingRestrictionRequestID = nil
+        parkingRouteRequestID = nil
+        isPreviewingParkingRoute = false
         locationService.stopUpdating()
         routeSimulator.stop()
         routeMap.removeSimulatedVehicle()
@@ -124,6 +144,9 @@ final class MapHomeViewModel: ObservableObject {
         routeSimulator.stop()
         routeMap.removeSimulatedVehicle()
         routeRequestID = nil
+        parkingRestrictionRequestID = nil
+        parkingRouteRequestID = nil
+        restrictionDestinationID = nil
         searchText = location.displayTitle
         destination = location
         route = nil
@@ -132,7 +155,16 @@ final class MapHomeViewModel: ObservableObject {
         isRouteLoading = false
         isDriving = false
         simulationState = nil
+        isApproachingDestination = false
+        parkingRestrictions = []
+        isParkingRestrictionsLoading = false
+        parkingRestrictionErrorMessage = nil
+        isParkingRouteLoading = false
+        isPreviewingParkingRoute = false
+        parkingRouteErrorMessage = nil
+        selectedParkingLot = nil
         selectedRouteOption = .fastest
+        routeMap.clearParkingRestrictions()
     }
 
     func retryRoute() async {
@@ -143,9 +175,17 @@ final class MapHomeViewModel: ObservableObject {
     func leaveRoutePreview() {
         simulationStartID = nil
         routeRequestID = nil
+        parkingRestrictionRequestID = nil
+        parkingRouteRequestID = nil
+        restrictionDestinationID = nil
         isRouteLoading = false
         isDriving = false
         simulationState = nil
+        isApproachingDestination = false
+        parkingRestrictions = []
+        isParkingRestrictionsLoading = false
+        isParkingRouteLoading = false
+        isPreviewingParkingRoute = false
         routeSimulator.stop()
         routeMap.removeSimulatedVehicle()
         routeMap.clear()
@@ -154,6 +194,9 @@ final class MapHomeViewModel: ObservableObject {
     func clearDestination() {
         simulationStartID = nil
         routeRequestID = nil
+        parkingRestrictionRequestID = nil
+        parkingRouteRequestID = nil
+        restrictionDestinationID = nil
         destination = nil
         route = nil
         safeRoute = nil
@@ -161,6 +204,14 @@ final class MapHomeViewModel: ObservableObject {
         isRouteLoading = false
         isDriving = false
         simulationState = nil
+        isApproachingDestination = false
+        parkingRestrictions = []
+        isParkingRestrictionsLoading = false
+        parkingRestrictionErrorMessage = nil
+        isParkingRouteLoading = false
+        isPreviewingParkingRoute = false
+        parkingRouteErrorMessage = nil
+        selectedParkingLot = nil
         routeSimulator.stop()
         routeMap.removeSimulatedVehicle()
         searchText = ""
@@ -176,22 +227,106 @@ final class MapHomeViewModel: ObservableObject {
 
     func startDriving() {
         guard let selectedRoute else { return }
+        beginDriving(on: selectedRoute, departureDelay: 3)
+    }
+
+    /// P 버튼 — 현재 주행 좌표에서 가장 가까운 목적지 주변 주차장으로 안내를 바꾼다.
+    func navigateToNearestParking() async {
+        guard isDriving, !isParkingRouteLoading,
+              let destination,
+              let currentRoute = selectedRoute else { return }
+
+        let requestID = UUID()
+        parkingRouteRequestID = requestID
+        isParkingRouteLoading = true
+        parkingRouteErrorMessage = nil
+
+        let start = simulationState?.coordinate ?? currentRoute.goal
+
+        do {
+            let suggestions = try await parkingService.suggestions(
+                near: destination.coordinate,
+                radiusMeters: JunctionServerConfiguration.fixedSearchRadiusMeters
+            )
+            guard parkingRouteRequestID == requestID, isDriving else { return }
+
+            guard let nearest = suggestions.min(by: {
+                $0.lot.coordinate.distance(to: start) < $1.lot.coordinate.distance(to: start)
+            }) else {
+                throw JunctionServerError.httpStatus(code: 404, body: "주변 주차장을 찾지 못했습니다.")
+            }
+
+            let routes = try await directionsService.routes(
+                from: start,
+                to: nearest.lot.coordinate,
+                waypoints: [],
+                options: [.fastest, .comfortable]
+            )
+            guard parkingRouteRequestID == requestID, isDriving else { return }
+
+            guard let fastest = routes.first(where: { $0.option == .fastest }) ?? routes.first else {
+                throw NaverMapsError.emptyResult
+            }
+
+            route = fastest
+            safeRoute = routes.first { $0.option == .comfortable }
+            selectedRouteOption = fastest.option
+            selectedParkingLot = nearest.lot
+            isApproachingDestination = fastest.distance <= Int(Self.destinationApproachDistanceMeters)
+
+            // 기존 안내를 멈춘 뒤 새 경로를 전체 보기로 먼저 보여 준다.
+            simulationStartID = nil
+            routeSimulator.stop()
+            isPreviewingParkingRoute = true
+            routeMap.showParkingRouteOverview(fastest)
+
+            // 전체 경로 카메라 이동(0.9초) 뒤 약 1.2초간 경로를 읽을 시간을 준다.
+            try? await Task.sleep(nanoseconds: 2_100_000_000)
+            guard parkingRouteRequestID == requestID, isDriving else { return }
+
+            let routeStart = fastest.path.first ?? fastest.start
+            routeMap.focusOnNavigationVehicle(
+                at: routeStart,
+                bearing: Self.bearingOfFirstSegment(in: fastest)
+            )
+
+            // 차량 줌인 애니메이션이 끝난 다음 시뮬레이션을 재개해야 카메라가 튀지 않는다.
+            try? await Task.sleep(nanoseconds: 1_150_000_000)
+            guard parkingRouteRequestID == requestID, isDriving else { return }
+            isPreviewingParkingRoute = false
+            beginDriving(on: fastest, departureDelay: 0, preparesMap: false)
+        } catch {
+            guard parkingRouteRequestID == requestID else { return }
+            parkingRouteErrorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+
+        if parkingRouteRequestID == requestID {
+            isParkingRouteLoading = false
+        }
+    }
+
+    private func beginDriving(on route: DrivingRoute,
+                              departureDelay: TimeInterval,
+                              preparesMap: Bool = true) {
         let startID = UUID()
         simulationStartID = startID
         isDriving = true
         simulationState = nil
-        routeMap.showRoute(selectedRoute, fitsRoute: false, showsEndpoints: false)
-        let startCoordinate = selectedRoute.path.first ?? selectedRoute.start
-        routeMap.updateSimulatedVehicle(
-            at: startCoordinate,
-            bearing: Self.bearingOfFirstSegment(in: selectedRoute),
-            remainingPath: selectedRoute.path
-        )
-        let departureDeadline = Date().addingTimeInterval(3)
+        let startCoordinate = route.path.first ?? route.start
+        if preparesMap {
+            routeMap.showRoute(route, fitsRoute: false, showsEndpoints: false)
+            routeMap.updateSimulatedVehicle(
+                at: startCoordinate,
+                bearing: Self.bearingOfFirstSegment(in: route),
+                remainingPath: route.path
+            )
+        }
+        updateDestinationApproach(remainingDistance: Double(route.distance))
+        let departureDeadline = Date().addingTimeInterval(departureDelay)
         Task {
             var speedSegments: [RouteSpeedLimitSegment] = []
             if let speedLimitService {
-                try? await speedLimitService.prepare(for: selectedRoute)
+                try? await speedLimitService.prepare(for: route)
                 speedSegments = speedLimitService.routeSegments
             }
             guard isDriving, simulationStartID == startID else { return }
@@ -200,7 +335,7 @@ final class MapHomeViewModel: ObservableObject {
                 try? await Task.sleep(nanoseconds: UInt64(remainingDelay * 1_000_000_000))
             }
             guard isDriving, simulationStartID == startID else { return }
-            routeSimulator.start(route: selectedRoute,
+            routeSimulator.start(route: route,
                                  maximumSpeedKilometersPerHour: 100,
                                  speedLimitSegments: speedSegments)
         }
@@ -208,11 +343,19 @@ final class MapHomeViewModel: ObservableObject {
 
     func finishDriving() {
         simulationStartID = nil
+        parkingRouteRequestID = nil
         routeSimulator.stop()
         routeMap.removeSimulatedVehicle()
         simulationState = nil
+        isApproachingDestination = false
+        isParkingRouteLoading = false
+        isPreviewingParkingRoute = false
         isDriving = false
         if let selectedRoute { routeMap.showRoute(selectedRoute) }
+    }
+
+    func dismissParkingRouteError() {
+        parkingRouteErrorMessage = nil
     }
 
     var selectedRoute: DrivingRoute? {
@@ -229,7 +372,7 @@ final class MapHomeViewModel: ObservableObject {
     var simulatedSpeedLimitKPH: Int? { simulationState?.speedLimitKPH }
     var hasArrived: Bool { simulationState?.isFinished == true }
     var canFinishDriving: Bool {
-        isDriving && remainingDistance <= Self.finishButtonVisibilityDistanceMeters
+        isDriving && isApproachingDestination
     }
 
     private func route(for option: RouteOption) -> DrivingRoute? {
@@ -256,12 +399,55 @@ final class MapHomeViewModel: ObservableObject {
 
     private func handleSimulationChange(_ state: RouteSimulationState) {
         simulationState = state
+        updateDestinationApproach(remainingDistance: state.remainingDistance)
         if let selectedRoute {
             let nextIndex = min(state.pathIndex + 1, selectedRoute.path.count)
             let remainingPath = [state.coordinate] + Array(selectedRoute.path.dropFirst(nextIndex))
             routeMap.updateSimulatedVehicle(at: state.coordinate,
                                             bearing: state.bearing,
                                             remainingPath: remainingPath)
+        }
+    }
+
+    private func updateDestinationApproach(remainingDistance: Double) {
+        isApproachingDestination = isDriving
+            && remainingDistance <= Self.destinationApproachDistanceMeters
+
+        guard isApproachingDestination else { return }
+        loadParkingRestrictionsIfNeeded()
+    }
+
+    /// 도착 임박 구간에 처음 들어온 순간에만 백엔드를 호출한다.
+    private func loadParkingRestrictionsIfNeeded() {
+        guard let destination,
+              restrictionDestinationID != destination.id,
+              !isParkingRestrictionsLoading else { return }
+
+        let requestID = UUID()
+        parkingRestrictionRequestID = requestID
+        restrictionDestinationID = destination.id
+        isParkingRestrictionsLoading = true
+        parkingRestrictionErrorMessage = nil
+
+        Task {
+            do {
+                let zones = try await enforcementService.zones(
+                    near: destination.coordinate,
+                    radiusMeters: JunctionServerConfiguration.fixedSearchRadiusMeters
+                )
+                guard parkingRestrictionRequestID == requestID,
+                      self.destination?.id == destination.id else { return }
+                parkingRestrictions = zones
+                routeMap.showParkingRestrictions(zones)
+            } catch {
+                guard parkingRestrictionRequestID == requestID else { return }
+                parkingRestrictionErrorMessage = (error as? LocalizedError)?.errorDescription
+                    ?? error.localizedDescription
+            }
+
+            if parkingRestrictionRequestID == requestID {
+                isParkingRestrictionsLoading = false
+            }
         }
     }
 
