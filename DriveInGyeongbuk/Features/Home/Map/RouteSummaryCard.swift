@@ -24,18 +24,25 @@ struct RouteSummaryCard: View {
                 .foregroundStyle(Self.primaryText)
                 .lineLimit(1)
 
-            distanceLabel
+            HStack(alignment: .lastTextBaseline) {
+                distanceLabel
+                Spacer()
+
+                if route.tollFare > 0 {
+                    Text(route.tollFare, format: .currency(code: "KRW").precision(.fractionLength(0)))
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+            }
 
             HStack(spacing: 11) {
                 if route.tollFare > 0 {
                     metricCard(title: "Hi-Pass Pref.",
                                minutes: route.durationMinutes,
-                               detail: route.tollFareText,
                                color: Self.green)
                 }
                 metricCard(title: "Safe Path",
                            minutes: (safeRoute ?? route).durationMinutes,
-                           detail: nil,
                            color: Self.accentText)
             }
 
@@ -65,7 +72,6 @@ struct RouteSummaryCard: View {
 
     private func metricCard(title: String,
                             minutes: Int,
-                            detail: String?,
                             color: Color) -> some View {
         VStack(spacing: 4) {
             Text(title)
@@ -77,16 +83,10 @@ struct RouteSummaryCard: View {
                 Text("min")
                     .font(.callout.weight(.bold))
             }
-
-            if let detail {
-                Text(detail)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
         }
         .foregroundStyle(color)
         .frame(maxWidth: .infinity)
-        .frame(height: 122)
+        .frame(height: 107)
         .background(Color(red: 34 / 255, green: 42 / 255, blue: 61 / 255),
                     in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(color.opacity(0.55)))
@@ -99,10 +99,6 @@ private extension DrivingRoute {
         distance >= 1000 ? String(format: "%.1f", Double(distance) / 1000) : "\(distance)"
     }
     var distanceUnit: String { distance >= 1000 ? "km" : "m" }
-    var tollFareText: String {
-        let amount = tollFare.formatted(.currency(code: "KRW").precision(.fractionLength(0)))
-        return "Toll \(amount)"
-    }
 }
 
 extension View {
