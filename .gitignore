@@ -69,3 +69,6 @@ fastlane/test_output
 \[2026-08-12\]NODELINKDATA/
 
 .omc/
+
+# 개발자 로컬 도구 설정 (전역 gitignore 에만 걸려 있어 클론한 사람에게는 안 잡힌다)
+.claude/settings.local.json
