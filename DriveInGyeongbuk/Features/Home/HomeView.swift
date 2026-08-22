@@ -2,81 +2,43 @@
 //  HomeView.swift
 //  DriveInGyeongbuk
 //
-//  Created by 정홍섭 on 8/22/26.
+//  앱의 루트. 피그마 시안의 하단 탭바(Map / Trip / Settings)를 담당한다.
+//
+//  탭바는 직접 그리지 않는다. iOS 26 의 `TabView` 가 시안과 같은 글래스 알약
+//  모양으로 알아서 그려 주고, 지도는 그 아래까지 꽉 차게 깔린다.
 //
 
 import SwiftUI
 
 struct HomeView: View {
 
-    @State private var isShowingNaverMapsTest = false
-    @State private var isShowingLocationSearchTest = false
-    @State private var isShowingSpeedLimitTest = false
-    @State private var isShowingParkingTest = false
+    /// 시안의 선택 색(#4F79FF).
+    private static let accent = Color(red: 79 / 255, green: 121 / 255, blue: 255 / 255)
+
+    private enum HomeTab: Hashable {
+        case map, trip, settings
+    }
+
+    @State private var selection: HomeTab = .map
 
     var body: some View {
-        VStack(spacing: 24) {
-            VStack(spacing: 8) {
-                Image(systemName: "car.fill")
-                    .imageScale(.large)
-                    .font(.system(size: 44))
-                    .foregroundStyle(.tint)
-                Text("Drive in Gyeongbuk")
-                    .font(.title2.bold())
-                Text("Navigation for foreign drivers in Gyeongsangbuk-do")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
+        TabView(selection: $selection) {
+            Tab("Map", systemImage: "map.fill", value: .map) {
+                MapHomeView()
             }
 
-            // 제품 UI 는 아직 없다. 서비스 계층 검증용 화면으로만 연결해 둔다.
-            VStack(spacing: 12) {
-                Button {
-                    isShowingNaverMapsTest = true
-                } label: {
-                    Label("NaverMaps 서비스 테스트", systemImage: "map")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
+            Tab("Trip", systemImage: "bag.fill", value: .trip) {
+                TripView()
+            }
 
-                Button {
-                    isShowingLocationSearchTest = true
-                } label: {
-                    Label("도착지 검색 API 테스트", systemImage: "magnifyingglass")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-
-                Button {
-                    isShowingSpeedLimitTest = true
-                } label: {
-                    Label("SpeedLimit 서비스 테스트", systemImage: "gauge.with.needle")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-
-                Button {
-                    isShowingParkingTest = true
-                } label: {
-                    Label("Parking · Enforcement 서비스 테스트", systemImage: "parkingsign.circle")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
+            Tab("Settings", systemImage: "gearshape.fill", value: .settings) {
+                SettingsView()
             }
         }
-        .padding(24)
-        .fullScreenCover(isPresented: $isShowingNaverMapsTest) {
-            NaverMapsTestView(onClose: { isShowingNaverMapsTest = false })
-        }
-        .fullScreenCover(isPresented: $isShowingLocationSearchTest) {
-            NaverLocationSearchTestView(onClose: { isShowingLocationSearchTest = false })
-        }
-        .fullScreenCover(isPresented: $isShowingSpeedLimitTest) {
-            SpeedLimitTestView(onClose: { isShowingSpeedLimitTest = false })
-        }
-        .fullScreenCover(isPresented: $isShowingParkingTest) {
-            ParkingTestView(onClose: { isShowingParkingTest = false })
-        }
+        .tint(Self.accent)
+        // 시안이 다크 테마 기준이라 화면 전체를 다크로 고정한다.
+        // 라이트 테마도 지원하려면 이 한 줄만 지우면 된다 (지도는 이미 colorScheme 을 따라간다).
+        .preferredColorScheme(.dark)
     }
 }
 
