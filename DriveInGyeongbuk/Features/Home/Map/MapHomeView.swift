@@ -130,7 +130,13 @@ struct MapHomeView: View {
                 .ignoresSafeArea()
 
             if viewModel.isDriving {
-                drivingOverlay
+                if viewModel.isPreviewingParkingRoute {
+                    parkingRoutePreviewOverlay
+                        .transition(.opacity)
+                } else {
+                    drivingOverlay
+                        .transition(.opacity)
+                }
             } else {
                 VStack {
                     Spacer()
@@ -142,6 +148,7 @@ struct MapHomeView: View {
             }
         }
         .navigationTitle("")
+        .animation(.easeInOut(duration: 0.3), value: viewModel.isPreviewingParkingRoute)
         .navigationBarTitleDisplayMode(.inline)
         .toolbarVisibility(viewModel.isDriving ? .hidden : .visible, for: .navigationBar)
         .toolbarVisibility(.hidden, for: .tabBar)
@@ -221,7 +228,9 @@ struct MapHomeView: View {
 
                 if viewModel.canFinishDriving {
                     VStack(spacing: 24) {
-                        parkingButton
+                        if viewModel.selectedParkingLot == nil {
+                            parkingButton
+                        }
                         finishButton
                     }
                     .frame(width: 120)
@@ -279,11 +288,46 @@ struct MapHomeView: View {
 
     @ViewBuilder
     private var maneuverCard: some View {
-        if viewModel.isApproachingDestination {
+        if let parkingLot = viewModel.selectedParkingLot {
+            VStack(spacing: 24) {
+                regularManeuverCard
+                parkingRecommendationBanner(name: parkingLot.name)
+            }
+        } else if viewModel.isApproachingDestination {
             approachingDestinationHeader
         } else {
             regularManeuverCard
         }
+    }
+
+    private var parkingRoutePreviewOverlay: some View {
+        VStack {
+            if let parkingLot = viewModel.selectedParkingLot {
+                parkingRecommendationBanner(name: parkingLot.name)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 20)
+            }
+            Spacer()
+        }
+        .ignoresSafeArea(edges: .bottom)
+    }
+
+    private func parkingRecommendationBanner(name: String) -> some View {
+        Text(name)
+            .font(.system(size: 20, weight: .bold))
+            .foregroundStyle(Color(red: 1, green: 247 / 255, blue: 246 / 255))
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .frame(height: 46)
+            .background(Color(red: 88 / 255, green: 88 / 255, blue: 88 / 255),
+                        in: RoundedRectangle(cornerRadius: 12))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(.black)
+            }
+            .accessibilityLabel("Recommended parking lot, \(name)")
     }
 
     private var approachingDestinationHeader: some View {

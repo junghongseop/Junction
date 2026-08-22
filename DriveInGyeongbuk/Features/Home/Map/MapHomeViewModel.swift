@@ -43,6 +43,7 @@ final class MapHomeViewModel: ObservableObject {
     @Published private(set) var isParkingRestrictionsLoading = false
     @Published private(set) var parkingRestrictionErrorMessage: String?
     @Published private(set) var isParkingRouteLoading = false
+    @Published private(set) var isPreviewingParkingRoute = false
     @Published private(set) var parkingRouteErrorMessage: String?
     @Published private(set) var selectedParkingLot: ParkingLot?
 
@@ -121,6 +122,7 @@ final class MapHomeViewModel: ObservableObject {
         simulationStartID = nil
         parkingRestrictionRequestID = nil
         parkingRouteRequestID = nil
+        isPreviewingParkingRoute = false
         locationService.stopUpdating()
         routeSimulator.stop()
         routeMap.removeSimulatedVehicle()
@@ -158,6 +160,7 @@ final class MapHomeViewModel: ObservableObject {
         isParkingRestrictionsLoading = false
         parkingRestrictionErrorMessage = nil
         isParkingRouteLoading = false
+        isPreviewingParkingRoute = false
         parkingRouteErrorMessage = nil
         selectedParkingLot = nil
         selectedRouteOption = .fastest
@@ -182,6 +185,7 @@ final class MapHomeViewModel: ObservableObject {
         parkingRestrictions = []
         isParkingRestrictionsLoading = false
         isParkingRouteLoading = false
+        isPreviewingParkingRoute = false
         routeSimulator.stop()
         routeMap.removeSimulatedVehicle()
         routeMap.clear()
@@ -205,6 +209,7 @@ final class MapHomeViewModel: ObservableObject {
         isParkingRestrictionsLoading = false
         parkingRestrictionErrorMessage = nil
         isParkingRouteLoading = false
+        isPreviewingParkingRoute = false
         parkingRouteErrorMessage = nil
         selectedParkingLot = nil
         routeSimulator.stop()
@@ -268,7 +273,28 @@ final class MapHomeViewModel: ObservableObject {
             selectedRouteOption = fastest.option
             selectedParkingLot = nearest.lot
             isApproachingDestination = fastest.distance <= Int(Self.destinationApproachDistanceMeters)
-            beginDriving(on: fastest, departureDelay: 0)
+
+            // 기존 안내를 멈춘 뒤 새 경로를 전체 보기로 먼저 보여 준다.
+            simulationStartID = nil
+            routeSimulator.stop()
+            isPreviewingParkingRoute = true
+            routeMap.showParkingRouteOverview(fastest)
+
+            // 전체 경로 카메라 이동(0.9초) 뒤 약 1.2초간 경로를 읽을 시간을 준다.
+            try? await Task.sleep(nanoseconds: 2_100_000_000)
+            guard parkingRouteRequestID == requestID, isDriving else { return }
+
+            let routeStart = fastest.path.first ?? fastest.start
+            routeMap.focusOnNavigationVehicle(
+                at: routeStart,
+                bearing: Self.bearingOfFirstSegment(in: fastest)
+            )
+
+            // 차량 줌인 애니메이션이 끝난 다음 시뮬레이션을 재개해야 카메라가 튀지 않는다.
+            try? await Task.sleep(nanoseconds: 1_150_000_000)
+            guard parkingRouteRequestID == requestID, isDriving else { return }
+            isPreviewingParkingRoute = false
+            beginDriving(on: fastest, departureDelay: 0, preparesMap: false)
         } catch {
             guard parkingRouteRequestID == requestID else { return }
             parkingRouteErrorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
@@ -279,18 +305,22 @@ final class MapHomeViewModel: ObservableObject {
         }
     }
 
-    private func beginDriving(on route: DrivingRoute, departureDelay: TimeInterval) {
+    private func beginDriving(on route: DrivingRoute,
+                              departureDelay: TimeInterval,
+                              preparesMap: Bool = true) {
         let startID = UUID()
         simulationStartID = startID
         isDriving = true
         simulationState = nil
-        routeMap.showRoute(route, fitsRoute: false, showsEndpoints: false)
         let startCoordinate = route.path.first ?? route.start
-        routeMap.updateSimulatedVehicle(
-            at: startCoordinate,
-            bearing: Self.bearingOfFirstSegment(in: route),
-            remainingPath: route.path
-        )
+        if preparesMap {
+            routeMap.showRoute(route, fitsRoute: false, showsEndpoints: false)
+            routeMap.updateSimulatedVehicle(
+                at: startCoordinate,
+                bearing: Self.bearingOfFirstSegment(in: route),
+                remainingPath: route.path
+            )
+        }
         updateDestinationApproach(remainingDistance: Double(route.distance))
         let departureDeadline = Date().addingTimeInterval(departureDelay)
         Task {
@@ -319,6 +349,7 @@ final class MapHomeViewModel: ObservableObject {
         simulationState = nil
         isApproachingDestination = false
         isParkingRouteLoading = false
+        isPreviewingParkingRoute = false
         isDriving = false
         if let selectedRoute { routeMap.showRoute(selectedRoute) }
     }

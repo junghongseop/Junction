@@ -37,6 +37,8 @@ final class NaverMapController: ObservableObject {
     private var simulatedVehicleMarker: NMFMarker?
     private var parkingRestrictionPaths: [NMFPath] = []
     private var parkingRestrictionMarkers: [NMFMarker] = []
+    private var fadingRoutePath: NMFPath?
+    private var routeRevealTimer: Timer?
 
     // MARK: 명령
 
@@ -159,6 +161,102 @@ final class NaverMapController: ObservableObject {
         run { self.removeParkingRestrictionOverlays() }
     }
 
+    /// P 버튼으로 경로를 바꿀 때 기존 경로를 흐리게 남기고 새 경로를 순서대로 그리면서
+    /// 전체 경로가 화면에 들어오도록 카메라를 부드럽게 이동한다.
+    func showParkingRouteOverview(_ route: DrivingRoute) {
+        run {
+            guard let mapView = self.mapView, route.path.count >= 2 else { return }
+
+            self.routeRevealTimer?.invalidate()
+            self.routeRevealTimer = nil
+            self.fadingRoutePath?.mapView = nil
+
+            let previousPath = self.routePath
+            previousPath?.color = UIColor(red: 82 / 255, green: 97 / 255, blue: 122 / 255, alpha: 1)
+            previousPath?.outlineColor = UIColor(red: 14 / 255, green: 31 / 255, blue: 67 / 255, alpha: 1)
+            self.fadingRoutePath = previousPath
+
+            self.endpointMarkers.forEach { $0.mapView = nil }
+            self.endpointMarkers = []
+
+            let points = route.path.map {
+                NMGLatLng(lat: $0.latitude, lng: $0.longitude)
+            }
+            let routeColor = route.option == .comfortable
+                ? UIColor(red: 79 / 255, green: 121 / 255, blue: 1, alpha: 1)
+                : UIColor(red: 0, green: 230 / 255, blue: 118 / 255, alpha: 1)
+            let outlineColor = UIColor(red: 14 / 255, green: 31 / 255, blue: 67 / 255, alpha: 1)
+
+            let newPath = NMFPath()
+            newPath.path = NMGLineString(points: points)
+            newPath.width = 7
+            newPath.outlineWidth = 2
+            newPath.color = .clear
+            newPath.outlineColor = .clear
+            newPath.passedColor = routeColor
+            newPath.passedOutlineColor = outlineColor
+            newPath.progress = 0
+            newPath.mapView = mapView
+            self.routePath = newPath
+
+            let parkingMarker = NMFMarker(position: points[points.count - 1])
+            parkingMarker.iconImage = NMF_MARKER_IMAGE_BLUE
+            parkingMarker.captionText = "Parking"
+            parkingMarker.mapView = mapView
+            self.endpointMarkers = [parkingMarker]
+
+            let revealStartedAt = Date()
+            let revealDuration: TimeInterval = 0.8
+            let timer = Timer(timeInterval: 1 / 60, repeats: true) { [weak self, weak newPath] timer in
+                guard let self, let newPath else {
+                    timer.invalidate()
+                    return
+                }
+                let progress = min(1, Date().timeIntervalSince(revealStartedAt) / revealDuration)
+                newPath.progress = progress
+                guard progress >= 1 else { return }
+
+                timer.invalidate()
+                newPath.color = routeColor
+                newPath.outlineColor = outlineColor
+                newPath.progress = 0
+                self.fadingRoutePath?.mapView = nil
+                self.fadingRoutePath = nil
+                self.routeRevealTimer = nil
+            }
+            self.routeRevealTimer = timer
+            RunLoop.main.add(timer, forMode: .common)
+
+            let bounds = NMGLatLngBounds(latLngs: points)
+            let update = NMFCameraUpdate(
+                fit: bounds,
+                paddingInsets: UIEdgeInsets(top: 120, left: 40, bottom: 130, right: 40)
+            )
+            update.animation = .easeOut
+            update.animationDuration = 0.9
+            mapView.moveCamera(update)
+        }
+    }
+
+    /// 전체 경로 확인이 끝난 뒤 차량 위치로 플라이 줌인한다.
+    func focusOnNavigationVehicle(at coordinate: NaverCoordinate,
+                                  bearing: Double,
+                                  zoom: Double = 18.5,
+                                  duration: TimeInterval = 1.1) {
+        run {
+            guard let mapView = self.mapView else { return }
+            let params = NMFCameraUpdateParams()
+            params.scroll(to: NMGLatLng(lat: coordinate.latitude, lng: coordinate.longitude))
+            params.zoom(to: zoom)
+            params.rotate(to: bearing)
+            let update = NMFCameraUpdate(params: params)
+            update.pivot = CGPoint(x: 0.5, y: 0.62)
+            update.animation = .fly
+            update.animationDuration = duration
+            mapView.moveCamera(update)
+        }
+    }
+
     /// 자동차 경로와 출발·도착 마커를 그리고, 하단 요약 카드 위로 전체 경로를 맞춘다.
     func showRoute(_ route: DrivingRoute,
                    fitsRoute: Bool = true,
@@ -242,6 +340,10 @@ final class NaverMapController: ObservableObject {
     }
 
     private func removeRouteOverlays() {
+        routeRevealTimer?.invalidate()
+        routeRevealTimer = nil
+        fadingRoutePath?.mapView = nil
+        fadingRoutePath = nil
         routePath?.mapView = nil
         routePath = nil
         endpointMarkers.forEach { $0.mapView = nil }
