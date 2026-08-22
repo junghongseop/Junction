@@ -166,6 +166,8 @@ struct NaverMapView: UIViewRepresentable {
 
     /// 현위치 추적 모드. 권한이 없으면 `.disabled` 로 두어야 SDK 가 헛돌지 않는다.
     var positionMode: NMFMyPositionMode = .disabled
+    /// 주행 모드가 자체적으로 카메라를 옮긴 뒤 적용할 근거리 줌. 미리보기 화면에서는 `nil`.
+    var navigationZoom: Double? = nil
     /// 어두운 지도를 쓸지. 피그마 시안이 다크라 기본은 다크로 두고, 라이트 모드에서는 밝은 지도를 쓴다.
     var isNightMode: Bool = true
     /// 로고·저작권 표시가 검색 필드나 탭바에 가리지 않도록 띄울 여백.
@@ -207,6 +209,20 @@ struct NaverMapView: UIViewRepresentable {
             context.coordinator.appliedPositionMode = positionMode
             mapView.positionMode = positionMode
         }
+
+        if context.coordinator.appliedNavigationZoom != navigationZoom {
+            context.coordinator.appliedNavigationZoom = navigationZoom
+            if let navigationZoom {
+                // `.direction` 전환이 비동기로 전체 경로 카메라를 덮어쓸 수 있어
+                // 추적 카메라가 자리 잡은 다음 축척만 다시 강제한다.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak mapView] in
+                    guard let mapView else { return }
+                    let update = NMFCameraUpdate(zoomTo: navigationZoom)
+                    update.animation = .easeIn
+                    mapView.moveCamera(update)
+                }
+            }
+        }
     }
 
     static func dismantleUIView(_ uiView: NMFNaverMapView, coordinator: Coordinator) {
@@ -222,6 +238,7 @@ struct NaverMapView: UIViewRepresentable {
         let controller: NaverMapController
         /// 마지막으로 지도에 넣어 준 추적 모드. `updateUIView` 참고.
         var appliedPositionMode: NMFMyPositionMode?
+        var appliedNavigationZoom: Double?
 
         init(controller: NaverMapController) {
             self.controller = controller

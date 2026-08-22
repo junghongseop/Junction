@@ -125,6 +125,7 @@ struct MapHomeView: View {
         ZStack {
             NaverMapView(controller: viewModel.routeMap,
                          positionMode: viewModel.isDriving ? .direction : .disabled,
+                         navigationZoom: viewModel.isDriving ? 18.5 : nil,
                          isNightMode: colorScheme == .dark,
                          logoMargin: UIEdgeInsets(top: 0, left: 12, bottom: 390, right: 0))
                 .ignoresSafeArea()
