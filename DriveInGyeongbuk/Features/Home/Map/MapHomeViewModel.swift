@@ -179,11 +179,23 @@ final class MapHomeViewModel: ObservableObject {
         isDriving = true
         simulationState = nil
         routeMap.showRoute(selectedRoute, fitsRoute: false, showsEndpoints: false)
+        let startCoordinate = selectedRoute.path.first ?? selectedRoute.start
+        routeMap.updateSimulatedVehicle(
+            at: startCoordinate,
+            bearing: Self.bearingOfFirstSegment(in: selectedRoute),
+            remainingPath: selectedRoute.path
+        )
+        let departureDeadline = Date().addingTimeInterval(3)
         Task {
             var speedSegments: [RouteSpeedLimitSegment] = []
             if let speedLimitService {
                 try? await speedLimitService.prepare(for: selectedRoute)
                 speedSegments = speedLimitService.routeSegments
+            }
+            guard isDriving, simulationStartID == startID else { return }
+            let remainingDelay = departureDeadline.timeIntervalSinceNow
+            if remainingDelay > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(remainingDelay * 1_000_000_000))
             }
             guard isDriving, simulationStartID == startID else { return }
             routeSimulator.start(route: selectedRoute,
@@ -238,8 +250,27 @@ final class MapHomeViewModel: ObservableObject {
 
     private func handleSimulationChange(_ state: RouteSimulationState) {
         simulationState = state
-        routeMap.updateSimulatedVehicle(at: state.coordinate, bearing: state.bearing)
+        if let selectedRoute {
+            let nextIndex = min(state.pathIndex + 1, selectedRoute.path.count)
+            let remainingPath = [state.coordinate] + Array(selectedRoute.path.dropFirst(nextIndex))
+            routeMap.updateSimulatedVehicle(at: state.coordinate,
+                                            bearing: state.bearing,
+                                            remainingPath: remainingPath)
+        }
         if state.isFinished { finishDriving() }
+    }
+
+    private static func bearingOfFirstSegment(in route: DrivingRoute) -> Double {
+        guard route.path.count >= 2 else { return 0 }
+        let start = route.path[0]
+        let end = route.path[1]
+        let startLatitude = start.latitude * .pi / 180
+        let endLatitude = end.latitude * .pi / 180
+        let longitudeDelta = (end.longitude - start.longitude) * .pi / 180
+        let y = sin(longitudeDelta) * cos(endLatitude)
+        let x = cos(startLatitude) * sin(endLatitude)
+            - sin(startLatitude) * cos(endLatitude) * cos(longitudeDelta)
+        return (atan2(y, x) * 180 / .pi + 360).truncatingRemainder(dividingBy: 360)
     }
 
     private func loadRoute() async {

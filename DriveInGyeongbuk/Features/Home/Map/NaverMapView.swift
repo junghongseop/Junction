@@ -72,6 +72,7 @@ final class NaverMapController: ObservableObject {
     /// 시뮬레이션 좌표에 차량 마커를 옮기고 카메라가 근거리에서 따라가게 한다.
     func updateSimulatedVehicle(at coordinate: NaverCoordinate,
                                 bearing: Double,
+                                remainingPath: [NaverCoordinate],
                                 zoom: Double = 18.5) {
         run {
             guard let mapView = self.mapView else { return }
@@ -82,16 +83,29 @@ final class NaverMapController: ObservableObject {
             } else {
                 marker = NMFMarker(position: position)
                 marker.iconImage = NMFOverlayImage(image: Self.simulatedVehicleImage)
-                marker.width = 44
-                marker.height = 58
+                marker.width = 52
+                marker.height = 52
                 marker.anchor = CGPoint(x: 0.5, y: 0.5)
                 marker.mapView = mapView
                 self.simulatedVehicleMarker = marker
             }
             marker.position = position
-            marker.angle = CGFloat(bearing)
+            // 지도 카메라가 진행 방향으로 회전하므로 마커는 항상 화면 위를 향한다.
+            marker.angle = 0
 
-            let update = NMFCameraUpdate(scrollTo: position, zoomTo: zoom)
+            if remainingPath.count >= 2 {
+                let points = remainingPath.map {
+                    NMGLatLng(lat: $0.latitude, lng: $0.longitude)
+                }
+                self.routePath?.path = NMGLineString(points: points)
+            }
+
+            let params = NMFCameraUpdateParams()
+            params.scroll(to: position)
+            params.zoom(to: zoom)
+            params.rotate(to: bearing)
+            let update = NMFCameraUpdate(params: params)
+            update.pivot = CGPoint(x: 0.5, y: 0.62)
             update.animation = .none
             mapView.moveCamera(update)
         }
@@ -192,33 +206,25 @@ final class NaverMapController: ObservableObject {
 
     /// 외부 이미지 의존성 없이 그린 상단 시점 차량 아이콘.
     private static let simulatedVehicleImage: UIImage = {
-        let size = CGSize(width: 44, height: 58)
+        let size = CGSize(width: 52, height: 52)
         return UIGraphicsImageRenderer(size: size).image { context in
-            let shadow = UIBezierPath(roundedRect: CGRect(x: 8, y: 3, width: 28, height: 52),
-                                      cornerRadius: 11)
+            let shadow = UIBezierPath(ovalIn: CGRect(x: 3, y: 3, width: 46, height: 46))
             UIColor.black.withAlphaComponent(0.35).setFill()
             context.cgContext.setShadow(offset: CGSize(width: 0, height: 3), blur: 4)
             shadow.fill()
             context.cgContext.setShadow(offset: .zero, blur: 0)
 
-            let body = UIBezierPath(roundedRect: CGRect(x: 8, y: 2, width: 28, height: 52),
-                                    cornerRadius: 11)
-            UIColor(red: 0, green: 230 / 255, blue: 118 / 255, alpha: 1).setFill()
-            body.fill()
+            UIColor.white.setFill()
+            UIBezierPath(ovalIn: CGRect(x: 3, y: 2, width: 46, height: 46)).fill()
 
-            let windshield = UIBezierPath(roundedRect: CGRect(x: 12, y: 10, width: 20, height: 13),
-                                          cornerRadius: 5)
-            UIColor(red: 6 / 255, green: 14 / 255, blue: 32 / 255, alpha: 0.9).setFill()
-            windshield.fill()
-
-            let rearWindow = UIBezierPath(roundedRect: CGRect(x: 13, y: 35, width: 18, height: 9),
-                                          cornerRadius: 4)
-            UIColor(red: 6 / 255, green: 14 / 255, blue: 32 / 255, alpha: 0.75).setFill()
-            rearWindow.fill()
-
-            UIColor.white.withAlphaComponent(0.95).setFill()
-            UIBezierPath(ovalIn: CGRect(x: 11, y: 5, width: 5, height: 4)).fill()
-            UIBezierPath(ovalIn: CGRect(x: 28, y: 5, width: 5, height: 4)).fill()
+            let arrow = UIBezierPath()
+            arrow.move(to: CGPoint(x: 26, y: 8))
+            arrow.addLine(to: CGPoint(x: 39, y: 39))
+            arrow.addLine(to: CGPoint(x: 26, y: 32))
+            arrow.addLine(to: CGPoint(x: 13, y: 39))
+            arrow.close()
+            UIColor(red: 0, green: 82 / 255, blue: 212 / 255, alpha: 1).setFill()
+            arrow.fill()
         }
     }()
 }
