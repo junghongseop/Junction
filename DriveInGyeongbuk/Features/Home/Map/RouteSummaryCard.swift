@@ -81,21 +81,15 @@ struct RouteSummaryCard: View {
             onSelect(route.option)
         } label: {
             VStack(spacing: 4) {
-                HStack(spacing: 5) {
-                    Image(systemName: selectedOption == route.option ? "checkmark.circle.fill" : "circle")
-                    Text(title)
-                }
-                .font(.caption.weight(.bold))
-                .tracking(0.6)
+                Text(title)
+                    .font(.caption.weight(.bold))
+                    .tracking(0.6)
                 HStack(alignment: .lastTextBaseline, spacing: 4) {
                     Text(route.durationMinutes, format: .number)
                         .font(.system(size: 38, weight: .heavy))
                     Text("min")
                         .font(.callout.weight(.bold))
                 }
-                Text(route.distanceDescription)
-                    .font(.caption2.weight(.semibold))
-                    .opacity(0.75)
             }
             .foregroundStyle(color)
             .frame(maxWidth: .infinity)
@@ -103,7 +97,7 @@ struct RouteSummaryCard: View {
             .background(Color(red: 34 / 255, green: 42 / 255, blue: 61 / 255),
                         in: RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12)
-                .stroke(color.opacity(selectedOption == route.option ? 0.95 : 0.35),
+                .stroke(selectedOption == route.option ? color.opacity(0.95) : Color.white.opacity(0.12),
                         lineWidth: selectedOption == route.option ? 2 : 1))
         }
         .buttonStyle(.plain)

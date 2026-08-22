@@ -54,6 +54,19 @@ final class NaverMapController: ObservableObject {
         run { self.mapView?.positionMode = .direction }
     }
 
+    /// 주행 시작 시 현재 위치 가까이 확대한 뒤 진행 방향 추적을 켠다.
+    func startNavigation(at coordinate: NaverCoordinate, zoom: Double = 17.5) {
+        run {
+            guard let mapView = self.mapView else { return }
+            let update = NMFCameraUpdate(scrollTo: NMGLatLng(lat: coordinate.latitude,
+                                                             lng: coordinate.longitude),
+                                         zoomTo: zoom)
+            update.animation = .easeIn
+            mapView.moveCamera(update)
+            mapView.positionMode = .direction
+        }
+    }
+
     /// 자동차 경로와 출발·도착 마커를 그리고, 하단 요약 카드 위로 전체 경로를 맞춘다.
     func showRoute(_ route: DrivingRoute,
                    fitsRoute: Bool = true,

@@ -150,7 +150,11 @@ final class MapHomeViewModel: ObservableObject {
         guard let selectedRoute else { return }
         isDriving = true
         routeMap.showRoute(selectedRoute, fitsRoute: false, showsEndpoints: false)
-        routeMap.moveToCurrentLocation()
+        if let currentLocation = locationService.lastCoordinate {
+            routeMap.startNavigation(at: currentLocation)
+        } else {
+            routeMap.moveToCurrentLocation()
+        }
     }
 
     func finishDriving() {
