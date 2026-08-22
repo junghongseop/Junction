@@ -27,6 +27,8 @@ struct MapHomeView: View {
 
     @State private var isShowingInfo = false
     @State private var navigationPath: [DestinationRoute] = []
+    @State private var isVoiceGuidanceMuted = false
+    @State private var isShowingDriveSettings = false
 
     /// 시안 값. 지도 로고가 하단 탭바에 가리지 않도록 띄우는 여백이기도 하다.
     private let horizontalMargin: CGFloat = 16
@@ -127,17 +129,21 @@ struct MapHomeView: View {
                          logoMargin: UIEdgeInsets(top: 0, left: 12, bottom: 390, right: 0))
                 .ignoresSafeArea()
 
-            VStack {
-                Spacer()
-                routeCard
-                    .padding(.horizontal, 18.5)
-                    .padding(.bottom, 40)
+            if viewModel.isDriving {
+                drivingOverlay
+            } else {
+                VStack {
+                    Spacer()
+                    routeCard
+                        .padding(.horizontal, 18.5)
+                        .padding(.bottom, 40)
+                }
+                .ignoresSafeArea(edges: .bottom)
             }
-            .ignoresSafeArea(edges: .bottom)
         }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbarVisibility(.visible, for: .navigationBar)
+        .toolbarVisibility(viewModel.isDriving ? .hidden : .visible, for: .navigationBar)
         .toolbarVisibility(.hidden, for: .tabBar)
         .toolbarBackground(.hidden, for: .navigationBar)
         .task(id: viewModel.destination?.id) {
@@ -166,8 +172,123 @@ struct MapHomeView: View {
             RouteSummaryCard(destination: destination,
                              route: route,
                              safeRoute: viewModel.safeRoute,
+                             selectedOption: viewModel.selectedRouteOption,
+                             onSelect: viewModel.selectRoute,
                              onStart: viewModel.startDriving)
         }
+    }
+
+    private var drivingOverlay: some View {
+        VStack(spacing: 0) {
+            maneuverCard
+                .padding(.horizontal, 16)
+                .padding(.top, 20)
+
+            Spacer()
+
+            HStack(alignment: .bottom) {
+                VStack(spacing: 16) {
+                    driveCircleButton(systemName: isVoiceGuidanceMuted ? "speaker.slash.fill" : "speaker.wave.2.fill") {
+                        isVoiceGuidanceMuted.toggle()
+                    }
+                    driveCircleButton(systemName: "gearshape.fill") {
+                        isShowingDriveSettings.toggle()
+                    }
+                    .popover(isPresented: $isShowingDriveSettings) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Drive settings").font(.headline)
+                            Toggle("Voice guidance", isOn: Binding(
+                                get: { !isVoiceGuidanceMuted },
+                                set: { isVoiceGuidanceMuted = !$0 }
+                            ))
+                        }
+                        .padding()
+                        .presentationCompactAdaptation(.popover)
+                    }
+                }
+
+                Spacer()
+
+                Button("Finish", action: viewModel.finishDriving)
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(Color(red: 105 / 255, green: 0, blue: 5 / 255))
+                    .padding(.horizontal, 24)
+                    .frame(height: 48)
+                    .background(Color(red: 1, green: 180 / 255, blue: 171 / 255), in: .capsule)
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 32)
+
+            driveStatusBar
+                .padding(.horizontal, 16)
+                .padding(.bottom, 20)
+        }
+        .ignoresSafeArea(edges: .bottom)
+    }
+
+    private var maneuverCard: some View {
+        let step = viewModel.selectedRoute?.steps.first { $0.kind != .departure }
+        return VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 16) {
+                Image(systemName: step?.kind.symbolName ?? "arrow.up")
+                    .font(.system(size: 38, weight: .bold))
+                    .frame(width: 64, height: 64)
+                    .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 16))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(step?.distanceDescription ?? "Start")
+                        .font(.system(size: 40, weight: .heavy))
+                    Text(step?.instructionTitle ?? "Follow the route")
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundStyle(Color(red: 201 / 255, green: 212 / 255, blue: 1))
+                        .lineLimit(1)
+                }
+            }
+
+            Text(step?.roadName ?? "Route guidance")
+                .font(.system(size: 32, weight: .bold))
+                .lineLimit(1)
+        }
+        .foregroundStyle(.white)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(24)
+        .background(Color(red: 0, green: 82 / 255, blue: 212 / 255),
+                    in: RoundedRectangle(cornerRadius: 24))
+        .shadow(color: .black.opacity(0.25), radius: 20, y: 12)
+    }
+
+    private var driveStatusBar: some View {
+        HStack(alignment: .lastTextBaseline) {
+            Text(estimatedArrival, style: .time)
+                .font(.system(size: 30, weight: .bold))
+            Text("ETA").font(.system(size: 18, weight: .medium))
+            Spacer()
+            Text(viewModel.selectedRoute?.distanceValue ?? "–")
+                .font(.system(size: 30, weight: .bold))
+            Text(viewModel.selectedRoute?.distanceUnit ?? "km")
+                .font(.system(size: 18, weight: .medium))
+        }
+        .foregroundStyle(Color(red: 179 / 255, green: 197 / 255, blue: 1))
+        .padding(.horizontal, 16)
+        .frame(height: 80)
+        .background(Color(red: 17 / 255, green: 33 / 255, blue: 72 / 255).opacity(0.88),
+                    in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.1)))
+    }
+
+    private var estimatedArrival: Date {
+        Date().addingTimeInterval(TimeInterval(viewModel.selectedRoute?.duration ?? 0))
+    }
+
+    private func driveCircleButton(systemName: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 19, weight: .semibold))
+                .frame(width: 56, height: 56)
+                .background(.ultraThinMaterial, in: .circle)
+                .overlay(Circle().stroke(Color.white.opacity(0.2)))
+        }
+        .buttonStyle(.plain)
     }
 
     private func locationStatus(_ message: String) -> some View {
@@ -195,6 +316,35 @@ struct MapHomeView: View {
         .buttonStyle(.glass)
         .buttonBorderShape(.circle)
         .accessibilityLabel("About this app")
+    }
+}
+
+private extension RouteStep {
+    var distanceDescription: String {
+        distance >= 1000
+            ? String(format: "%.1fkm", Double(distance) / 1000)
+            : "\(max(0, distance))m"
+    }
+
+    var instructionTitle: String {
+        switch kind {
+        case .turnLeft: return "Turn left"
+        case .turnRight: return "Turn right"
+        case .uTurn: return "Make a U-turn"
+        case .keepLeft: return "Keep left"
+        case .keepRight: return "Keep right"
+        case .tollGate: return "Use the Hi-Pass lane"
+        case .highwayEntrance: return "Enter the highway"
+        case .highwayExit: return "Take the exit"
+        case .roundabout: return "Enter the roundabout"
+        case .destination: return "Arrive at destination"
+        default: return "Continue straight"
+        }
+    }
+
+    var roadName: String {
+        let trimmed = instructions.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Route guidance" : trimmed
     }
 }
 

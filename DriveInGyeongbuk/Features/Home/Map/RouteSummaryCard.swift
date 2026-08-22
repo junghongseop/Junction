@@ -11,6 +11,8 @@ struct RouteSummaryCard: View {
     let destination: NaverLocation
     let route: DrivingRoute
     let safeRoute: DrivingRoute?
+    let selectedOption: RouteOption
+    let onSelect: (RouteOption) -> Void
     let onStart: () -> Void
 
     private static let primaryText = Color(red: 218 / 255, green: 226 / 255, blue: 253 / 255)
@@ -28,21 +30,19 @@ struct RouteSummaryCard: View {
                 distanceLabel
                 Spacer()
 
-                if route.tollFare > 0 {
-                    Text(route.tollFare, format: .currency(code: "KRW").precision(.fractionLength(0)))
+                if activeRoute.tollFare > 0 {
+                    Text(activeRoute.tollFare, format: .currency(code: "KRW").precision(.fractionLength(0)))
                         .font(.body.weight(.medium))
                         .foregroundStyle(.secondary)
                 }
             }
 
             HStack(spacing: 11) {
-                if route.tollFare > 0 {
-                    metricCard(title: "Hi-Pass Pref.",
-                               minutes: route.durationMinutes,
-                               color: Self.green)
-                }
+                metricCard(title: "Hi-Pass",
+                           route: route,
+                           color: Self.green)
                 metricCard(title: "Safe Path",
-                           minutes: (safeRoute ?? route).durationMinutes,
+                           route: safeRoute ?? route,
                            color: Self.accentText)
             }
 
@@ -61,39 +61,58 @@ struct RouteSummaryCard: View {
 
     private var distanceLabel: some View {
         HStack(alignment: .lastTextBaseline, spacing: 4) {
-            Text(route.distanceValue)
+            Text(activeRoute.distanceValue)
                 .font(.system(size: 40, weight: .heavy))
                 .foregroundStyle(Self.accentText)
-            Text(route.distanceUnit)
+            Text(activeRoute.distanceUnit)
                 .font(.callout.weight(.bold))
                 .foregroundStyle(Self.accentText.opacity(0.7))
         }
     }
 
+    private var activeRoute: DrivingRoute {
+        selectedOption == .comfortable ? (safeRoute ?? route) : route
+    }
+
     private func metricCard(title: String,
-                            minutes: Int,
+                            route: DrivingRoute,
                             color: Color) -> some View {
-        VStack(spacing: 4) {
-            Text(title)
+        Button {
+            onSelect(route.option)
+        } label: {
+            VStack(spacing: 4) {
+                HStack(spacing: 5) {
+                    Image(systemName: selectedOption == route.option ? "checkmark.circle.fill" : "circle")
+                    Text(title)
+                }
                 .font(.caption.weight(.bold))
                 .tracking(0.6)
-            HStack(alignment: .lastTextBaseline, spacing: 4) {
-                Text(minutes, format: .number)
-                    .font(.system(size: 40, weight: .heavy))
-                Text("min")
-                    .font(.callout.weight(.bold))
+                HStack(alignment: .lastTextBaseline, spacing: 4) {
+                    Text(route.durationMinutes, format: .number)
+                        .font(.system(size: 38, weight: .heavy))
+                    Text("min")
+                        .font(.callout.weight(.bold))
+                }
+                Text(route.distanceDescription)
+                    .font(.caption2.weight(.semibold))
+                    .opacity(0.75)
             }
+            .foregroundStyle(color)
+            .frame(maxWidth: .infinity)
+            .frame(height: 107)
+            .background(Color(red: 34 / 255, green: 42 / 255, blue: 61 / 255),
+                        in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12)
+                .stroke(color.opacity(selectedOption == route.option ? 0.95 : 0.35),
+                        lineWidth: selectedOption == route.option ? 2 : 1))
         }
-        .foregroundStyle(color)
-        .frame(maxWidth: .infinity)
-        .frame(height: 107)
-        .background(Color(red: 34 / 255, green: 42 / 255, blue: 61 / 255),
-                    in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(color.opacity(0.55)))
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(title), \(route.durationMinutes) minutes, \(route.distanceDescription)")
+        .accessibilityAddTraits(selectedOption == route.option ? .isSelected : [])
     }
 }
 
-private extension DrivingRoute {
+extension DrivingRoute {
     var durationMinutes: Int { max(1, Int(ceil(Double(duration) / 60))) }
     var distanceValue: String {
         distance >= 1000 ? String(format: "%.1f", Double(distance) / 1000) : "\(distance)"

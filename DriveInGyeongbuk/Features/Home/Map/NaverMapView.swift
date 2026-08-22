@@ -55,7 +55,9 @@ final class NaverMapController: ObservableObject {
     }
 
     /// 자동차 경로와 출발·도착 마커를 그리고, 하단 요약 카드 위로 전체 경로를 맞춘다.
-    func showRoute(_ route: DrivingRoute) {
+    func showRoute(_ route: DrivingRoute,
+                   fitsRoute: Bool = true,
+                   showsEndpoints: Bool = true) {
         run {
             guard let mapView = self.mapView, route.path.count >= 2 else { return }
             self.removeRouteOverlays()
@@ -67,30 +69,37 @@ final class NaverMapController: ObservableObject {
             path.path = NMGLineString(points: points)
             path.width = 7
             path.outlineWidth = 2
-            path.color = UIColor(red: 79 / 255, green: 121 / 255, blue: 1, alpha: 1)
+            // 선택 경로가 겹치는 구간에서도 사용자가 어떤 모드를 골랐는지 즉시 알 수 있게 한다.
+            path.color = route.option == .comfortable
+                ? UIColor(red: 79 / 255, green: 121 / 255, blue: 1, alpha: 1)
+                : UIColor(red: 0, green: 230 / 255, blue: 118 / 255, alpha: 1)
             path.outlineColor = UIColor(red: 14 / 255, green: 31 / 255, blue: 67 / 255, alpha: 1)
             path.mapView = mapView
             self.routePath = path
 
-            let start = NMFMarker(position: points[0])
-            start.iconImage = NMF_MARKER_IMAGE_GREEN
-            start.captionText = "Start"
-            start.mapView = mapView
+            if showsEndpoints {
+                let start = NMFMarker(position: points[0])
+                start.iconImage = NMF_MARKER_IMAGE_GREEN
+                start.captionText = "Start"
+                start.mapView = mapView
 
-            let goal = NMFMarker(position: points[points.count - 1])
-            goal.iconImage = NMF_MARKER_IMAGE_BLUE
-            goal.captionText = "Destination"
-            goal.mapView = mapView
-            self.endpointMarkers = [start, goal]
+                let goal = NMFMarker(position: points[points.count - 1])
+                goal.iconImage = NMF_MARKER_IMAGE_BLUE
+                goal.captionText = "Destination"
+                goal.mapView = mapView
+                self.endpointMarkers = [start, goal]
+            }
 
-            let bounds = NMGLatLngBounds(latLngs: points)
-            let update = NMFCameraUpdate(fit: bounds,
-                                         paddingInsets: UIEdgeInsets(top: 96,
-                                                                     left: 40,
-                                                                     bottom: 390,
-                                                                     right: 40))
-            update.animation = .easeIn
-            mapView.moveCamera(update)
+            if fitsRoute {
+                let bounds = NMGLatLngBounds(latLngs: points)
+                let update = NMFCameraUpdate(fit: bounds,
+                                             paddingInsets: UIEdgeInsets(top: 96,
+                                                                         left: 40,
+                                                                         bottom: 390,
+                                                                         right: 40))
+                update.animation = .easeIn
+                mapView.moveCamera(update)
+            }
         }
     }
 

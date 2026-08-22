@@ -31,6 +31,7 @@ final class MapHomeViewModel: ObservableObject {
     @Published private(set) var destination: NaverLocation?
     @Published private(set) var route: DrivingRoute?
     @Published private(set) var safeRoute: DrivingRoute?
+    @Published private(set) var selectedRouteOption: RouteOption = .fastest
     @Published private(set) var isRouteLoading = false
     @Published private(set) var routeErrorMessage: String?
     @Published private(set) var isDriving = false
@@ -111,6 +112,7 @@ final class MapHomeViewModel: ObservableObject {
         routeErrorMessage = nil
         isRouteLoading = false
         isDriving = false
+        selectedRouteOption = .fastest
     }
 
     func retryRoute() async {
@@ -138,9 +140,35 @@ final class MapHomeViewModel: ObservableObject {
         recenterOnUser()
     }
 
+    func selectRoute(_ option: RouteOption) {
+        guard let selected = route(for: option) else { return }
+        selectedRouteOption = selected.option
+        routeMap.showRoute(selected)
+    }
+
     func startDriving() {
+        guard let selectedRoute else { return }
         isDriving = true
+        routeMap.showRoute(selectedRoute, fitsRoute: false, showsEndpoints: false)
         routeMap.moveToCurrentLocation()
+    }
+
+    func finishDriving() {
+        isDriving = false
+        if let selectedRoute { routeMap.showRoute(selectedRoute) }
+    }
+
+    var selectedRoute: DrivingRoute? {
+        route(for: selectedRouteOption) ?? route
+    }
+
+    private func route(for option: RouteOption) -> DrivingRoute? {
+        switch option {
+        case .comfortable:
+            return safeRoute
+        default:
+            return route
+        }
     }
 
     // MARK: -
