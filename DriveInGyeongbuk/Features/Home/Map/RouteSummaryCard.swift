@@ -97,7 +97,7 @@ struct RouteSummaryCard: View {
             .background(Color(red: 34 / 255, green: 42 / 255, blue: 61 / 255),
                         in: RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12)
-                .stroke(selectedOption == route.option ? color.opacity(0.95) : Color.white.opacity(0.12),
+                .stroke(selectedOption == route.option ? Self.green : Color.white.opacity(0.12),
                         lineWidth: selectedOption == route.option ? 2 : 1))
         }
         .buttonStyle(.plain)

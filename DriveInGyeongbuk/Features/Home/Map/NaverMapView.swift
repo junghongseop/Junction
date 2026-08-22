@@ -55,15 +55,16 @@ final class NaverMapController: ObservableObject {
     }
 
     /// 주행 시작 시 현재 위치 가까이 확대한 뒤 진행 방향 추적을 켠다.
-    func startNavigation(at coordinate: NaverCoordinate, zoom: Double = 17.5) {
+    func startNavigation(at coordinate: NaverCoordinate, zoom: Double = 18.5) {
         run {
             guard let mapView = self.mapView else { return }
+            // 추적 모드 전환이 카메라 축척을 덮어쓸 수 있으므로 먼저 활성화한다.
+            mapView.positionMode = .direction
             let update = NMFCameraUpdate(scrollTo: NMGLatLng(lat: coordinate.latitude,
                                                              lng: coordinate.longitude),
                                          zoomTo: zoom)
             update.animation = .easeIn
             mapView.moveCamera(update)
-            mapView.positionMode = .direction
         }
     }
 
