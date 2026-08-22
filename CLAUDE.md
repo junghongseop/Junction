@@ -13,6 +13,7 @@
 | 톨게이트에서 어느 차로로 붙어야 하는지 | `Services/TollGate` |
 | 도착지 인근 주차장 안내 | `Services/Parking` |
 | 도착지 인근 주정차 단속 구간 경고 | `Services/Enforcement` |
+| 주행 후 복기 (무엇을 알아야 했는지 설명) | `Services/Drive` · `Services/Debrief` |
 
 ## 현재 상태 (중요)
 
@@ -21,10 +22,14 @@
 프로토콜과 도메인 모델만 정의되어 있고 구현부는 `[]` / `nil` / `TODO` 다.
 파일 헤더에 `⚠️ 아직 껍데기(stub)입니다` 주석이 붙어 있으면 미구현이라는 뜻이다.
 
-제품 UI 는 **첫 화면(홈)까지** 있다. `HomeView` 가 Map / Trip / Settings 세 탭을 가진
-`TabView` 이고, Map 탭(`Features/Home/Map`)이 현재 위치를 중심으로 지도를 띄운다.
-Trip 탭과 Settings 의 설정 항목은 아직 껍데기다. 목적지 검색 필드도 입력만 받고
-아직 Geocoding 을 태우지 않는다.
+제품 UI 는 **홈 → 검색 → 경로 미리보기 → 주행 → Debrief** 까지 이어진다.
+`HomeView` 가 Map / Trip / Settings 세 탭을 가진 `TabView` 이고,
+Map 탭(`Features/Home/Map`)이 현재 위치를 중심으로 지도를 띄운다. Trip 탭과
+Settings 의 설정 항목은 아직 껍데기다.
+
+Debrief(주행 후 복기)는 `Features/Debrief` 다. 자세한 구조는 아래 "Debrief" 절 참고.
+`RoadSign` · `TollGate` 는 여전히 stub 이지만, Debrief 의 톨게이트 안내는 그것을
+기다리지 않고 `DrivingRoute.tollGateSteps` 만으로 돌아간다.
 
 서비스 계층 검증용 화면(`Test/`)은 **Settings 탭 > Developer 섹션**에 있다.
 제품 출시 전에 그 섹션을 통째로 걷어내면 된다.
@@ -261,6 +266,52 @@ enforcement.warnings(at: here)                                        // 위치 
   `EnforcementService` 는 조회 후 5분(`serverStatusLifetime`) 안에는 서버가 준
   `serverStatus` 를 그대로 쓰고, 그 뒤부터 시간표로 다시 계산한다.
 - 단속 카메라 · 어린이 보호구역은 이 API 에 없다. 별도 소스가 필요하다.
+
+## Debrief
+
+주행이 끝나면 `DebriefService` 가 파이프라인 한 번을 돌린다. 단계는 파일 머리말에 그려 뒀다.
+
+```
+DriveRecording → (공공데이터) → 규칙 기반 감지 → 검증 콘텐츠 첨부 → LLM → 화면
+```
+
+**무엇이 AI 고 무엇이 아닌지가 이 기능의 설계 그 자체다.** 사건 판단은 전부 규칙 기반
+(`Services/Debrief/Detectors`)이고, LLM 은 **감지된 사건 중 무엇을 설명할지 고르고,
+`TrafficRuleRepository` 의 검증된 문장을 다시 쓰는 일만** 한다. 법규·과태료·연락처를
+지어내지 못하도록 프롬프트(`DebriefPrompt`)와 응답 스키마 양쪽에서 막고, 받은 뒤에도
+`GeminiDebriefLLMClient.sanitize` 와 `DebriefService` 가 한 번씩 더 거른다.
+
+LLM 호출이 실패해도 화면은 비지 않는다. `DebriefLLMClientFactory` 가 규칙 기반
+`MockDebriefLLMClient` 로 대체하고 사유를 `Debrief.dataWarnings` 에 남긴다.
+개발자 화면(Settings > Developer > Debrief 시뮬레이션)에서 그 경고를 볼 수 있다.
+
+### Gemini Interactions API
+
+`Services/Debrief/LLM/GeminiInteractionsAPI.swift`. `POST /v1beta/interactions`,
+모델은 `gemini-3.6-flash`. 예전 `:generateContent` 와 요청·응답 모양이 다르다.
+
+`gemini-2.5-flash` 는 **쓸 수 없다.** 신규 사용자에게 막혀 있어 400 이 나고, 구글이
+응답에서 직접 `gemini-3.6-flash` 를 지목한다. 쿼터는 모델별로 따로 잡히므로
+한 모델이 429 로 막혀도 다른 모델은 멀쩡하다 — 디버깅할 때 헷갈리기 쉽다.
+
+- 본문은 `candidates[].content.parts[]` 가 아니라 **`steps[].content[].text`** 에 있다.
+  `steps` 에는 `type: "thought"` 스텝이 섞여 오고 **그 스텝에는 `content` 가 없다.**
+  본문은 `type: "model_output"` 스텝에만 있다.
+- **`generation_config.max_output_tokens` 는 생각 토큰과 출력 토큰의 합에 걸린다.**
+  이 모델은 답을 내기 전 생각에만 700~1500 토큰을 쓴다. 본문 길이만 보고 한도를 잡으면
+  생각이 예산을 먹고 본문이 중간에 잘린다. 잘려도 **HTTP 200 이고 `steps` 모양도 정상**
+  이라 파싱 실패로만 보인다. 구분은 `status` 뿐이다 (`completed` vs `incomplete`) →
+  `GeminiInteractionResponseDTO.isIncomplete` 로 걸러 `GeminiError.truncated` 를 던진다.
+- 생각 강도는 **`generation_config.thinking_level`** (`low`/`medium`/`high`). 끄는 값은 없다.
+  `thinking_config` · `reasoning_effort` 는 이 API 가 모르는 이름이라 400 이 난다.
+- 구조화 출력은 `generationConfig.responseSchema` 가 아니라 최상위 **`response_format`**.
+  `type` 은 **`text`** 여야 한다 (`json_schema` · `json_object` 는 지원 목록에 없어 400).
+  `type: "text"` + `mime_type: "application/json"` + `schema` 조합에서 enum 까지 강제된다.
+- 무료 티어는 **분당 요청 수 제한(20)** 이 빡빡하다. 연달아 시험하면 429 가 뜨는데
+  키나 코드 문제가 아니다. `GeminiError.rateLimited` 로 구분된다.
+
+키는 `Config.xcconfig` 의 `Gemini_API_Key` 다. 비어 있으면 규칙 기반 목으로 돌아가고
+감지·화면은 그대로 동작한다.
 
 ## 참고 문서
 

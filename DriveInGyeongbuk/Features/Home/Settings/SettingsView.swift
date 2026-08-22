@@ -17,6 +17,7 @@ struct SettingsView: View {
     @State private var isShowingNaverMapsTest = false
     @State private var isShowingSpeedLimitTest = false
     @State private var isShowingParkingTest = false
+    @State private var isShowingDebriefSimulation = false
 
     var body: some View {
         NavigationStack {
@@ -49,6 +50,12 @@ struct SettingsView: View {
                     } label: {
                         Label("Parking · Enforcement 서비스 테스트", systemImage: "parkingsign.circle")
                     }
+
+                    Button {
+                        isShowingDebriefSimulation = true
+                    } label: {
+                        Label("Debrief 시뮬레이션", systemImage: "text.magnifyingglass")
+                    }
                 }
             }
             .navigationTitle("Settings")
@@ -61,6 +68,9 @@ struct SettingsView: View {
         }
         .fullScreenCover(isPresented: $isShowingParkingTest) {
             ParkingTestView(onClose: { isShowingParkingTest = false })
+        }
+        .fullScreenCover(isPresented: $isShowingDebriefSimulation) {
+            DebriefSimulationView(onClose: { isShowingDebriefSimulation = false })
         }
     }
 

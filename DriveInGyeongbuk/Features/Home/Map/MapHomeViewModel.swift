@@ -46,6 +46,9 @@ final class MapHomeViewModel: ObservableObject {
     @Published private(set) var isPreviewingParkingRoute = false
     @Published private(set) var parkingRouteErrorMessage: String?
     @Published private(set) var selectedParkingLot: ParkingLot?
+    /// 방금 끝낸 주행. 값이 들어오면 화면이 Debrief 를 띄운다.
+    /// 주행을 기록하지 못했으면(너무 짧은 주행 등) `nil` 로 남고 지금까지와 똑같이 동작한다.
+    @Published private(set) var finishedDrive: DriveRecording?
 
     /// 지도 조작용.
     let map = NaverMapController()
@@ -65,6 +68,9 @@ final class MapHomeViewModel: ObservableObject {
     private let speedLimitService: (any SpeedLimitServicing)?
     private let parkingService: ParkingServicing
     private let enforcementService: EnforcementServicing
+    /// 주행 종료 후 Debrief 를 만들 재료를 모은다.
+    /// 주행 좌표는 시뮬레이터가 만들므로 아래 `handleSimulationChange` 가 넘겨 준다.
+    private let driveRecorder: DriveRecorderProtocol
     private var routeRequestID: UUID?
     private var simulationStartID: UUID?
     private var parkingRestrictionRequestID: UUID?
@@ -78,13 +84,15 @@ final class MapHomeViewModel: ObservableObject {
          routeSimulator: RouteLocationSimulating = RouteLocationSimulator(),
          speedLimitService: (any SpeedLimitServicing)? = try? SpeedLimitService(),
          parkingService: ParkingServicing = ParkingService(),
-         enforcementService: EnforcementServicing = EnforcementService()) {
+         enforcementService: EnforcementServicing = EnforcementService(),
+         driveRecorder: DriveRecorderProtocol = DriveRecorder()) {
         self.locationService = locationService
         self.directionsService = directionsService
         self.routeSimulator = routeSimulator
         self.speedLimitService = speedLimitService
         self.parkingService = parkingService
         self.enforcementService = enforcementService
+        self.driveRecorder = driveRecorder
         self.locationService.onChange = { [weak self] in
             self?.handleLocationChange()
         }
@@ -188,6 +196,8 @@ final class MapHomeViewModel: ObservableObject {
         isPreviewingParkingRoute = false
         routeSimulator.stop()
         routeMap.removeSimulatedVehicle()
+        // 끝까지 가지 않은 기록은 버린다. 남겨 두면 다음 주행에 섞인다.
+        driveRecorder.cancel()
         routeMap.clear()
     }
 
@@ -214,6 +224,7 @@ final class MapHomeViewModel: ObservableObject {
         selectedParkingLot = nil
         routeSimulator.stop()
         routeMap.removeSimulatedVehicle()
+        driveRecorder.cancel()
         searchText = ""
         routeMap.clear()
         recenterOnUser()
@@ -294,7 +305,7 @@ final class MapHomeViewModel: ObservableObject {
             try? await Task.sleep(nanoseconds: 1_150_000_000)
             guard parkingRouteRequestID == requestID, isDriving else { return }
             isPreviewingParkingRoute = false
-            beginDriving(on: fastest, departureDelay: 0, preparesMap: false)
+            beginDriving(on: fastest, departureDelay: 0, preparesMap: false, startsRecording: false)
         } catch {
             guard parkingRouteRequestID == requestID else { return }
             parkingRouteErrorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
@@ -307,10 +318,19 @@ final class MapHomeViewModel: ObservableObject {
 
     private func beginDriving(on route: DrivingRoute,
                               departureDelay: TimeInterval,
-                              preparesMap: Bool = true) {
+                              preparesMap: Bool = true,
+                              startsRecording: Bool = true) {
         let startID = UUID()
         simulationStartID = startID
         isDriving = true
+        // 주차장으로 안내를 바꾸는 경우(`startsRecording == false`)는 같은 주행의 연장이다.
+        // 여기서 다시 `start` 하면 지금까지 모은 샘플을 통째로 버리게 된다.
+        if startsRecording {
+            finishedDrive = nil
+            driveRecorder.start(route: route,
+                                originName: nil,
+                                destinationName: destination?.displayTitle)
+        }
         simulationState = nil
         let startCoordinate = route.path.first ?? route.start
         if preparesMap {
@@ -352,6 +372,16 @@ final class MapHomeViewModel: ObservableObject {
         isPreviewingParkingRoute = false
         isDriving = false
         if let selectedRoute { routeMap.showRoute(selectedRoute) }
+
+        // Debrief 는 여기서만 시작된다. 기록이 부실하면(샘플 5개 미만·1분 미만) 띄우지 않는다.
+        // 어느 쪽이든 위의 주행 종료 처리는 이미 끝나 있어서 기존 동작이 달라지지 않는다.
+        let recording = driveRecorder.finish()
+        finishedDrive = recording?.isSubstantial == true ? recording : nil
+    }
+
+    /// Debrief 를 닫는다.
+    func dismissDebrief() {
+        finishedDrive = nil
     }
 
     func dismissParkingRouteError() {
@@ -399,6 +429,13 @@ final class MapHomeViewModel: ObservableObject {
 
     private func handleSimulationChange(_ state: RouteSimulationState) {
         simulationState = state
+        // 주행 좌표는 실제 GPS 가 아니라 시뮬레이터가 만든다(`RouteLocationSimulator`).
+        // Debrief 도 화면과 같은 좌표를 봐야 하므로 여기서 레코더에 넘긴다.
+        // 실제 GPS 로 갈아탈 때는 이 한 줄 대신 `handleLocationChange` 에서 `lastFix` 를 넘기면 된다.
+        driveRecorder.record(DriveSample(coordinate: state.coordinate,
+                                        timestamp: .now,
+                                        speedKPH: state.currentSpeedKPH,
+                                        courseDegrees: state.bearing))
         updateDestinationApproach(remainingDistance: state.remainingDistance)
         if let selectedRoute {
             let nextIndex = min(state.pathIndex + 1, selectedRoute.path.count)
