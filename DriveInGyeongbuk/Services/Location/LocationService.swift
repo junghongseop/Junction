@@ -27,11 +27,33 @@ nonisolated enum LocationAuthorization {
     case authorized
 }
 
+/// 위치 갱신 한 건. 좌표 말고 속도·시각까지 필요한 쪽(주행 기록)이 쓴다.
+///
+/// `lastCoordinate` 만으로는 "얼마나 빨리 달렸는지"를 알 수 없어서 나중에 덧붙였다.
+/// 기존 호출부는 계속 `lastCoordinate` 를 쓰면 된다 — 그 의미는 바뀌지 않았다.
+nonisolated struct LocationFix: Hashable {
+    var coordinate: NaverCoordinate
+    var timestamp: Date
+    /// 대지 속도(m/s). CoreLocation 이 속도를 못 잰 경우(음수)는 `nil` 로 걸러 둔다.
+    var speedMPS: Double?
+    /// 진행 방위(도). 못 잰 경우(음수)는 `nil`.
+    var courseDegrees: Double?
+
+    init(_ location: CLLocation) {
+        coordinate = NaverCoordinate(location.coordinate)
+        timestamp = location.timestamp
+        speedMPS = location.speed >= 0 ? location.speed : nil
+        courseDegrees = location.course >= 0 ? location.course : nil
+    }
+}
+
 /// 테스트/목 교체를 위한 추상화.
 protocol LocationServicing: AnyObject {
     var authorization: LocationAuthorization { get }
     /// 마지막으로 받은 좌표. 아직 한 번도 못 받았으면 `nil`.
     var lastCoordinate: NaverCoordinate? { get }
+    /// 마지막 위치 갱신 원본(속도·방위·시각 포함). 주행 기록용.
+    var lastFix: LocationFix? { get }
     /// 권한 또는 좌표가 바뀔 때마다 불린다.
     var onChange: (() -> Void)? { get set }
 
@@ -44,6 +66,7 @@ final class LocationService: NSObject, LocationServicing, CLLocationManagerDeleg
 
     private(set) var authorization: LocationAuthorization = .notDetermined
     private(set) var lastCoordinate: NaverCoordinate?
+    private(set) var lastFix: LocationFix?
     var onChange: (() -> Void)?
 
     private let manager: CLLocationManager
@@ -83,7 +106,9 @@ final class LocationService: NSObject, LocationServicing, CLLocationManagerDeleg
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let location = locations.last else { return }
-        lastCoordinate = NaverCoordinate(location.coordinate)
+        let fix = LocationFix(location)
+        lastFix = fix
+        lastCoordinate = fix.coordinate
         onChange?()
     }
 

@@ -52,6 +52,12 @@ struct MapHomeView: View {
                 }
         }
         .sheet(isPresented: $isShowingInfo) { AppInfoView() }
+        // 주행이 끝나면 Debrief 를 덮어 씌운다.
+        // `navigationPath` 대신 별도 표현으로 띄우는 이유: 아래 `onChange(of: navigationPath)` 가
+        // 경로가 비면 목적지를 지우게 되어 있어서, 여기에 화면을 하나 더 밀어 넣으면 서로 싸운다.
+        .fullScreenCover(item: finishedDriveBinding) { recording in
+            DebriefView(recording: recording) { viewModel.dismissDebrief() }
+        }
         .onChange(of: navigationPath) { _, newPath in
             guard viewModel.destination != nil else { return }
             if newPath.isEmpty {
@@ -63,6 +69,12 @@ struct MapHomeView: View {
         }
         .onAppear { viewModel.onAppear() }
         .onDisappear { viewModel.onDisappear() }
+    }
+
+    /// `@Published private(set)` 은 그대로 바인딩할 수 없어서 읽기/닫기만 이어 준다.
+    private var finishedDriveBinding: Binding<DriveRecording?> {
+        Binding(get: { viewModel.finishedDrive },
+                set: { if $0 == nil { viewModel.dismissDebrief() } })
     }
 
     private var homeMap: some View {

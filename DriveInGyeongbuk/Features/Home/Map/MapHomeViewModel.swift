@@ -35,6 +35,9 @@ final class MapHomeViewModel: ObservableObject {
     @Published private(set) var isRouteLoading = false
     @Published private(set) var routeErrorMessage: String?
     @Published private(set) var isDriving = false
+    /// 방금 끝낸 주행. 값이 들어오면 화면이 Debrief 를 띄운다.
+    /// 주행을 기록하지 못했으면(위치 권한 없음 등) `nil` 로 남고 지금까지와 똑같이 동작한다.
+    @Published private(set) var finishedDrive: DriveRecording?
 
     /// 지도 조작용.
     let map = NaverMapController()
@@ -50,14 +53,18 @@ final class MapHomeViewModel: ObservableObject {
 
     private let locationService: LocationServicing
     private let directionsService: NaverDirectionsServicing
+    /// 주행 종료 후 Debrief 를 만들 재료를 모은다. 위치 갱신은 아래 `handleLocationChange` 가 넘겨 준다.
+    private let driveRecorder: DriveRecorderProtocol
     private var routeRequestID: UUID?
     /// 첫 좌표에서 한 번만 카메라를 옮긴다. 이후에는 SDK 의 추적 모드가 맡는다.
     private var hasCenteredOnUser = false
 
     init(locationService: LocationServicing = LocationService(),
-         directionsService: NaverDirectionsServicing = NaverDirectionsService()) {
+         directionsService: NaverDirectionsServicing = NaverDirectionsService(),
+         driveRecorder: DriveRecorderProtocol = DriveRecorder()) {
         self.locationService = locationService
         self.directionsService = directionsService
+        self.driveRecorder = driveRecorder
         self.locationService.onChange = { [weak self] in
             self?.handleLocationChange()
         }
@@ -124,6 +131,8 @@ final class MapHomeViewModel: ObservableObject {
         routeRequestID = nil
         isRouteLoading = false
         isDriving = false
+        // 끝까지 가지 않은 기록은 버린다. 남겨 두면 다음 주행에 섞인다.
+        driveRecorder.cancel()
         routeMap.clear()
     }
 
@@ -135,6 +144,7 @@ final class MapHomeViewModel: ObservableObject {
         routeErrorMessage = nil
         isRouteLoading = false
         isDriving = false
+        driveRecorder.cancel()
         searchText = ""
         routeMap.clear()
         recenterOnUser()
@@ -149,6 +159,10 @@ final class MapHomeViewModel: ObservableObject {
     func startDriving() {
         guard let selectedRoute else { return }
         isDriving = true
+        finishedDrive = nil
+        driveRecorder.start(route: selectedRoute,
+                            originName: nil,
+                            destinationName: destination?.displayTitle)
         routeMap.showRoute(selectedRoute, fitsRoute: false, showsEndpoints: false)
         if let currentLocation = locationService.lastCoordinate {
             routeMap.startNavigation(at: currentLocation)
@@ -160,6 +174,16 @@ final class MapHomeViewModel: ObservableObject {
     func finishDriving() {
         isDriving = false
         if let selectedRoute { routeMap.showRoute(selectedRoute) }
+
+        // Debrief 는 여기서만 시작된다. 기록이 부실하면(권한 거부·너무 짧은 주행) 띄우지 않는다.
+        // 어느 쪽이든 위의 주행 종료 처리는 이미 끝나 있어서 기존 동작이 달라지지 않는다.
+        let recording = driveRecorder.finish()
+        finishedDrive = recording?.isSubstantial == true ? recording : nil
+    }
+
+    /// Debrief 를 닫는다.
+    func dismissDebrief() {
+        finishedDrive = nil
     }
 
     var selectedRoute: DrivingRoute? {
@@ -183,6 +207,11 @@ final class MapHomeViewModel: ObservableObject {
 
         guard locationService.authorization == .authorized else { return }
         locationService.startUpdating()
+
+        // 주행 중이면 이 갱신을 기록에 남긴다.
+        // `LocationServicing.onChange` 는 구독자를 하나만 받아서, 이미 받고 있는 이쪽이
+        // 레코더에 넘겨 주는 구조다 (`DriveRecorder` 주석 참고).
+        driveRecorder.record(locationService.lastFix)
 
         guard !hasCenteredOnUser, let coordinate = locationService.lastCoordinate else { return }
         centerOnUser(coordinate)

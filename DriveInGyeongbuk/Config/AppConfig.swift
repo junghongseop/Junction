@@ -33,6 +33,12 @@ enum AppConfig {
     static let naverSearchClientID: String = infoValue("Naver_Search_Client_ID")
     static let naverSearchClientSecret: String = infoValue("Naver_Search_Client_Secret")
 
+    /// Google Gemini API 키. 주행 후 Debrief 안내문 생성에 쓴다.
+    ///
+    /// 비어 있어도 앱은 정상 동작한다 — `DebriefService` 가 규칙 기반 목 클라이언트로
+    /// 자동 전환한다. 발급은 https://aistudio.google.com/apikey
+    static let geminiAPIKey: String = infoValue("Gemini_API_Key")
+
     /// 지도를 표시할 웹 문서의 기준 URL.
     ///
     /// Web Dynamic Map 은 요청 도메인을 NCP 콘솔에 등록된 서비스 URL 과 대조한다.
@@ -51,6 +57,11 @@ enum AppConfig {
 
     static var hasNaverSearchCredentials: Bool {
         !naverSearchClientID.isEmpty && !naverSearchClientSecret.isEmpty
+    }
+
+    /// Debrief 안내문을 LLM 으로 만들 수 있는지.
+    static var hasGeminiCredentials: Bool {
+        !geminiAPIKey.isEmpty
     }
 
     // MARK: -

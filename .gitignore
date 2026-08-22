@@ -63,7 +63,9 @@ fastlane/test_output
 
 .DS_Store
 
-**/Config/Config.xcconfig
+# API 키가 들어가는 파일. `Config.xcconfig.sample` 만 커밋한다.
+# (`*.xcconfig` 는 `.xcconfig` 로 끝나는 파일만 잡으므로 sample 은 걸리지 않는다)
+**/Config/*.xcconfig
 
 # Local data folder (brackets escaped: they are glob characters)
 \[2026-08-12\]NODELINKDATA/

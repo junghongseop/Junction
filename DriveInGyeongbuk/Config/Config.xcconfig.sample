@@ -30,3 +30,17 @@ Naver_Search_Client_Secret =
 
 // (선택) Client ID 하나만 쓰던 기존 설정 호환용
 Naver_Map_API_Key = $(Naver_Map_Client_ID)
+
+// ---------------------------------------------------------------------------
+// Google Gemini API — 주행 후 Debrief 안내문 생성에 사용합니다.
+//
+// 발급: https://aistudio.google.com/apikey
+//
+// 비워 두어도 앱은 그대로 돌아갑니다. 키가 없으면 Debrief 가 규칙 기반
+// `MockDebriefLLMClient` 로 자동 전환되어 안내 문구만 좀 더 뻣뻣해집니다.
+//
+// ⚠️ 이 키는 앱 번들에 그대로 들어갑니다. IPA 를 열면 꺼낼 수 있으므로
+//    해커톤/데모용으로만 쓰고, 실제 배포 때는 서버를 한 겹 두어야 합니다.
+//    (Services/Debrief/LLM/GeminiDebriefLLMClient.swift 파일 머리말 참고)
+// ---------------------------------------------------------------------------
+Gemini_API_Key =
