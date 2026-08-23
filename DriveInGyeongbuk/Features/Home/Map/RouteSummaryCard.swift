@@ -14,7 +14,6 @@ struct RouteSummaryCard: View {
     let selectedOption: RouteOption
     let onSelect: (RouteOption) -> Void
     let onStart: () -> Void
-    var showsDemoStartInteraction = false
 
     private static let primaryText = Color(red: 218 / 255, green: 226 / 255, blue: 253 / 255)
     private static let accentText = Color(red: 179 / 255, green: 197 / 255, blue: 1)
@@ -56,9 +55,6 @@ struct RouteSummaryCard: View {
             .buttonStyle(.borderedProminent)
             .buttonBorderShape(.capsule)
             .tint(Color(red: 0, green: 82 / 255, blue: 212 / 255))
-            .demoInteraction("Tap Start Drive",
-                             isActive: showsDemoStartInteraction,
-                             labelPosition: .above)
         }
         .routeCardStyle()
     }

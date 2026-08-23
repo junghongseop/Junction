@@ -16,8 +16,6 @@ struct SearchView: View {
 
     @StateObject private var viewModel: SearchViewModel
     @FocusState private var isSearchFocused: Bool
-    @State private var isShowingTypingInteraction = false
-    @State private var demoSelectedResultID: String?
 
     private let onSelect: (NaverLocation) -> Void
     private let automaticDemoQuery: String?
@@ -71,7 +69,6 @@ struct SearchView: View {
     @MainActor
     private func runAutomaticDemoSearch(query: String) async {
         viewModel.clear()
-        isShowingTypingInteraction = true
         try? await Task.sleep(for: .milliseconds(550))
         guard !Task.isCancelled else { return }
 
@@ -82,7 +79,6 @@ struct SearchView: View {
         }
 
         try? await Task.sleep(for: .milliseconds(450))
-        isShowingTypingInteraction = false
         await viewModel.search()
         guard !Task.isCancelled else { return }
 
@@ -90,10 +86,8 @@ struct SearchView: View {
         let selected = viewModel.ensureDemoDestinationResult()
 
         // 결과가 나타난 것을 관객이 읽을 시간을 둔 뒤 행 선택을 재현한다.
-        demoSelectedResultID = selected.id
         try? await Task.sleep(for: .seconds(1.2))
         guard !Task.isCancelled else { return }
-        demoSelectedResultID = nil
         isSearchFocused = false
         onSelect(selected)
     }
@@ -133,10 +127,6 @@ struct SearchView: View {
                 }
             }
         }
-        .demoInteraction("Typing destination",
-                         isActive: isShowingTypingInteraction,
-                         systemImage: "keyboard.fill",
-                         labelPosition: .below)
     }
 
     private var resultsPanel: some View {
@@ -219,9 +209,6 @@ struct SearchView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .demoInteraction("Select destination",
-                         isActive: demoSelectedResultID == location.id,
-                         labelPosition: .below)
     }
 }
 
