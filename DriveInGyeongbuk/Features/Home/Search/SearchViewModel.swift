@@ -49,4 +49,16 @@ final class SearchViewModel: ObservableObject {
         results = []
         errorMessage = nil
     }
+
+    /// 지역 검색은 `영천시청`을 기관 자체보다 상호명에 "영천시청점"이 붙은 가게로
+    /// 돌려줄 때가 있다. 데모는 검증된 공식 주소 좌표를 결과 맨 위에 고정해 엉뚱한
+    /// 상점을 목적지로 선택하지 않게 한다.
+    @discardableResult
+    func ensureDemoDestinationResult() -> NaverLocation {
+        let destination = DemoDriveLocation.destination
+        results.removeAll { $0.coordinate.distance(to: destination.coordinate) < 5 }
+        results.insert(destination, at: 0)
+        errorMessage = nil
+        return destination
+    }
 }

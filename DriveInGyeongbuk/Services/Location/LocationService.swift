@@ -77,6 +77,20 @@ enum DemoDriveLocation {
     static let originCoordinate = NaverCoordinate(latitude: 35.9645099,
                                                   longitude: 128.9374072)
     static let destinationName = "영천시청"
+    /// 네이버 Geocoding 에 공식 주소(경상북도 영천시 시청로 16)를 조회한 좌표.
+    static let destinationCoordinate = NaverCoordinate(latitude: 35.9732599,
+                                                       longitude: 128.9386130)
+
+    static var destination: NaverLocation {
+        NaverLocation(title: destinationName,
+                      category: "공공기관 > 시청",
+                      description: "",
+                      roadAddress: "경상북도 영천시 시청로 16",
+                      jibunAddress: "경상북도 영천시 문외동 27",
+                      englishAddress: "16 Sicheong-ro, Yeongcheon-si, Gyeongsangbuk-do",
+                      coordinate: destinationCoordinate,
+                      link: URL(string: "https://www.yc.go.kr"))
+    }
 
     /// 자동 시연을 끄고 수동으로 점검해야 할 때는 Scheme launch argument 에
     /// `--disable-auto-demo` 를 추가한다. 위치는 계속 고정 좌표를 쓰므로 같은 조건에서
@@ -219,6 +233,12 @@ protocol RouteLocationSimulating: AnyObject {
 final class RouteLocationSimulator: RouteLocationSimulating {
     var onChange: ((RouteSimulationState) -> Void)?
 
+    private enum DemoSpeedingPhase {
+        case waiting
+        case active
+        case completed
+    }
+
     private var timer: Timer?
     private var route: DrivingRoute?
     private var cumulativeDistances: [Double] = []
@@ -232,6 +252,9 @@ final class RouteLocationSimulator: RouteLocationSimulating {
     private var decelerationKPHPerSecond: Double = 7
     private var nextCruiseAdjustment = Date.distantPast
     private var lastTick: Date?
+    /// 브리프의 과속 감지 기준을 확실히 넘긴 실제 연속 시간.
+    private var demoSpeedingQualifiedSeconds: TimeInterval = 0
+    private var demoSpeedingPhase: DemoSpeedingPhase = .waiting
 
     func start(route: DrivingRoute,
                maximumSpeedKilometersPerHour: Double = 100,
@@ -250,6 +273,8 @@ final class RouteLocationSimulator: RouteLocationSimulating {
         traveledDistance = 0
         simulatedSpeedKPH = 0
         smoothedBearing = nil
+        demoSpeedingQualifiedSeconds = 0
+        demoSpeedingPhase = .waiting
         chooseNextCruiseBehavior(at: Date())
         lastTick = Date()
         publishState()
@@ -268,6 +293,8 @@ final class RouteLocationSimulator: RouteLocationSimulating {
         traveledDistance = 0
         simulatedSpeedKPH = 0
         smoothedBearing = nil
+        demoSpeedingQualifiedSeconds = 0
+        demoSpeedingPhase = .waiting
         lastTick = nil
     }
 
@@ -276,11 +303,15 @@ final class RouteLocationSimulator: RouteLocationSimulating {
         let delta = min(0.5, now.timeIntervalSince(lastTick ?? now))
         lastTick = now
         if now >= nextCruiseAdjustment { chooseNextCruiseBehavior(at: now) }
+        updateDemoSpeedingActivation()
 
         let desiredSpeed = desiredSpeedKPH(at: traveledDistance)
-        let rate = desiredSpeed >= simulatedSpeedKPH
+        var rate = desiredSpeed >= simulatedSpeedKPH
             ? accelerationKPHPerSecond
             : decelerationKPHPerSecond
+        if demoSpeedingPhase == .active, desiredSpeed >= simulatedSpeedKPH {
+            rate = max(rate, 12)
+        }
         let maximumChange = rate * delta
         let difference = desiredSpeed - simulatedSpeedKPH
         simulatedSpeedKPH += min(max(difference, -maximumChange), maximumChange)
@@ -291,6 +322,7 @@ final class RouteLocationSimulator: RouteLocationSimulating {
             traveledDistance = totalDistance
             simulatedSpeedKPH = 0
         }
+        updateDemoSpeedingProgress(delta: delta)
         updateBearing(delta: delta)
         publishState()
     }
@@ -338,11 +370,15 @@ final class RouteLocationSimulator: RouteLocationSimulating {
     }
 
     private func reliableSpeedLimit(at distance: Double) -> Int? {
+        reliableSpeedLimitSegment(at: distance)?.limitKPH
+    }
+
+    private func reliableSpeedLimitSegment(at distance: Double) -> RouteSpeedLimitSegment? {
         speedLimitSegments.last {
             $0.distanceFromStartMeters <= distance
                 && distance <= $0.endDistanceFromStartMeters
                 && $0.isReliableLimit
-        }?.limitKPH
+        }
     }
 
     private func desiredSpeedKPH(at distance: Double) -> Double {
@@ -351,11 +387,50 @@ final class RouteLocationSimulator: RouteLocationSimulating {
                               Double(reliableSpeedLimit(at: distance) ?? Int(maximumSpeedKPH)))
         var desired = roadMaximum * cruiseFactor
 
+        // 자동 데모에서는 제한속도보다 충분히 높은 목표 속도를 잠깐 유지해
+        // `SustainedSpeedingDetector`가 설명할 수 있는 실제 주행 사건을 만든다.
+        if DemoDriveLocation.isAutomationEnabled,
+           demoSpeedingPhase == .active,
+           let limit = reliableSpeedLimit(at: distance) {
+            desired = max(desired, min(maximumSpeedKPH, Double(limit + 15)))
+        }
+
         // 목적지에 가까워지면 일정한 감속도로 자연스럽게 0까지 내려간다.
         let remaining = max(0, totalDistance - distance)
         let stoppingSpeed = sqrt(2 * 1.8 * remaining) * 3.6
         desired = min(desired, stoppingSpeed)
         return max(0, desired)
+    }
+
+    /// 출발·도착 감속 구간을 피해 제한속도 정보가 실제로 잡힌 도로에서만 시작한다.
+    private func updateDemoSpeedingActivation() {
+        guard DemoDriveLocation.isAutomationEnabled,
+              demoSpeedingPhase == .waiting,
+              let totalDistance = cumulativeDistances.last,
+              traveledDistance >= 60,
+              totalDistance - traveledDistance >= 350,
+              reliableSpeedLimit(at: traveledDistance) != nil else { return }
+        demoSpeedingPhase = .active
+    }
+
+    /// 감지 기준은 `> 제한속도 + 5km/h`가 5초 이상이다. 샘플링 경계 오차까지
+    /// 감안해 실제 속도로 7초를 채운 뒤 정상 순항으로 돌아간다.
+    private func updateDemoSpeedingProgress(delta: TimeInterval) {
+        guard demoSpeedingPhase == .active else { return }
+        guard let limit = reliableSpeedLimit(at: traveledDistance) else {
+            demoSpeedingQualifiedSeconds = 0
+            demoSpeedingPhase = .waiting
+            return
+        }
+
+        if simulatedSpeedKPH > Double(limit + 5) {
+            demoSpeedingQualifiedSeconds += delta
+            if demoSpeedingQualifiedSeconds >= 7 {
+                demoSpeedingPhase = .completed
+            }
+        } else {
+            demoSpeedingQualifiedSeconds = 0
+        }
     }
 
     private func chooseNextCruiseBehavior(at date: Date) {

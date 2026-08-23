@@ -18,7 +18,7 @@ final class MapHomeViewModel: ObservableObject {
     private static let fallbackZoom: Double = 9
     private static let focusZoom: Double = 15
     /// 이 거리 안에 들어오면 도착 임박 UI와 주정차 금지구역을 노출한다.
-    private static let destinationApproachDistanceMeters: Double = 20
+    private static let destinationApproachDistanceMeters: Double = 300
 
     // MARK: 입력
 
@@ -432,6 +432,10 @@ final class MapHomeViewModel: ObservableObject {
     }
     var simulatedSpeedKPH: Int { simulationState?.currentSpeedKPH ?? 0 }
     var simulatedSpeedLimitKPH: Int? { simulationState?.speedLimitKPH }
+    var isAboveDebriefSpeedThreshold: Bool {
+        guard let limit = simulatedSpeedLimitKPH else { return false }
+        return simulatedSpeedKPH > limit + 5
+    }
     var hasArrived: Bool { simulationState?.isFinished == true }
 
     /// 주행 종료 버튼을 보여 줄지.

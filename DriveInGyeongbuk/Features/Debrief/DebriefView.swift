@@ -21,6 +21,7 @@ struct DebriefView: View {
     @StateObject private var viewModel: DebriefViewModel
     @State private var navigationPath: [DebriefLesson] = []
     @State private var hasAutomaticallyOpenedLesson = false
+    @State private var demoSelectedLessonID: String?
 
     /// 닫기. 모달로 띄운 쪽이 넘겨 준다. 이미 있는 스택에 밀어 넣었으면 `nil` 이고,
     /// 그때는 Done 버튼 대신 기본 뒤로가기를 쓴다.
@@ -65,8 +66,11 @@ struct DebriefView: View {
                   !hasAutomaticallyOpenedLesson else { return }
             hasAutomaticallyOpenedLesson = true
             // Gemini가 만든 카드 제목과 목록을 먼저 보여 준 뒤 첫 카드를 선택한다.
-            try? await Task.sleep(for: .seconds(2))
+            try? await Task.sleep(for: .seconds(1))
+            demoSelectedLessonID = firstLesson.id
+            try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled else { return }
+            demoSelectedLessonID = nil
             navigationPath.append(firstLesson)
         }
         .preferredColorScheme(.dark)
@@ -177,6 +181,9 @@ struct DebriefView: View {
                         lessonRow(number: index + 1, title: lesson.title)
                     }
                     .buttonStyle(.plain)
+                    .demoInteraction("Open Gemini briefing",
+                                     isActive: demoSelectedLessonID == lesson.id,
+                                     labelPosition: .below)
                 }
             }
         }

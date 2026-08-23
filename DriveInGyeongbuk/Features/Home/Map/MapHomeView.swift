@@ -22,6 +22,13 @@ struct MapHomeView: View {
         case routePreview
     }
 
+    private enum DemoInteraction {
+        case search
+        case startDrive
+        case parking
+        case finish
+    }
+
     @StateObject private var viewModel = MapHomeViewModel()
     @Environment(\.colorScheme) private var colorScheme
 
@@ -33,6 +40,7 @@ struct MapHomeView: View {
     @State private var hasAutomaticallyStartedDrive = false
     @State private var hasAutomaticallyRequestedParking = false
     @State private var hasAutomaticallyFinishedDrive = false
+    @State private var demoInteraction: DemoInteraction?
 
     /// 시안 값. 지도 로고가 하단 탭바에 가리지 않도록 띄우는 여백이기도 하다.
     private let horizontalMargin: CGFloat = 16
@@ -88,6 +96,10 @@ struct MapHomeView: View {
             guard !Task.isCancelled,
                   navigationPath.isEmpty,
                   viewModel.destination == nil else { return }
+            demoInteraction = .search
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled else { return }
+            demoInteraction = nil
             navigationPath.append(.search)
         }
         .task(id: viewModel.route?.id) {
@@ -100,8 +112,11 @@ struct MapHomeView: View {
                   !hasAutomaticallyStartedDrive else { return }
             hasAutomaticallyStartedDrive = true
             // 경로 카드와 지도 경로가 모두 보인 다음 Start 동작을 재현한다.
-            try? await Task.sleep(for: .seconds(2))
+            try? await Task.sleep(for: .seconds(1))
+            demoInteraction = .startDrive
+            try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled else { return }
+            demoInteraction = nil
             viewModel.startDriving()
         }
         .task(id: viewModel.canSuggestParking) {
@@ -110,12 +125,15 @@ struct MapHomeView: View {
                   !hasAutomaticallyRequestedParking else { return }
             hasAutomaticallyRequestedParking = true
 
-            // 20m 지점에서 제한구역 조회 결과와 빨간 도로선을 먼저 보여 준다.
+            // 300m 지점에서 제한구역 조회 결과와 빨간 도로선을 먼저 보여 준다.
             while viewModel.isParkingRestrictionsLoading, !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(100))
             }
-            try? await Task.sleep(for: .seconds(2.5))
+            try? await Task.sleep(for: .seconds(1.5))
+            demoInteraction = .parking
+            try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled, viewModel.canSuggestParking else { return }
+            demoInteraction = nil
             await viewModel.navigateToNearestParking()
         }
         .task(id: viewModel.selectedParkingLot?.id) {
@@ -132,8 +150,11 @@ struct MapHomeView: View {
                   !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(150))
             }
-            try? await Task.sleep(for: .seconds(2))
+            try? await Task.sleep(for: .seconds(1))
+            demoInteraction = .finish
+            try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled, viewModel.isDriving, viewModel.hasArrived else { return }
+            demoInteraction = nil
             viewModel.finishDriving()
         }
     }
@@ -209,6 +230,9 @@ struct MapHomeView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Search destination")
         }
+        .demoInteraction("Tap destination search",
+                         isActive: demoInteraction == .search,
+                         labelPosition: .below)
     }
 
     // MARK: - 경로 미리보기
@@ -282,7 +306,8 @@ struct MapHomeView: View {
                              safeRoute: viewModel.safeRoute,
                              selectedOption: viewModel.selectedRouteOption,
                              onSelect: viewModel.selectRoute,
-                             onStart: viewModel.startDriving)
+                             onStart: viewModel.startDriving,
+                             showsDemoStartInteraction: demoInteraction == .startDrive)
         }
     }
 
@@ -365,6 +390,9 @@ struct MapHomeView: View {
         }
         .buttonStyle(.plain)
         .disabled(viewModel.isParkingRouteLoading || viewModel.selectedParkingLot != nil)
+        .demoInteraction("Tap P · Find parking",
+                         isActive: demoInteraction == .parking,
+                         labelPosition: .above)
         .accessibilityLabel(viewModel.isParkingRouteLoading
                             ? "Finding the nearest parking lot"
                             : "Route to the nearest parking lot")
@@ -377,6 +405,9 @@ struct MapHomeView: View {
             .padding(.horizontal, 24)
             .frame(height: 48)
             .background(Color(red: 1, green: 180 / 255, blue: 171 / 255), in: .capsule)
+            .demoInteraction("Tap Finish",
+                             isActive: demoInteraction == .finish,
+                             labelPosition: .above)
     }
 
     @ViewBuilder
@@ -425,7 +456,7 @@ struct MapHomeView: View {
 
     private var approachingDestinationHeader: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Approaching destination · 20 m")
+            Text("Approaching destination · 300 m")
                 .font(.system(size: 32, weight: .bold))
                 .foregroundStyle(Color(red: 218 / 255, green: 226 / 255, blue: 253 / 255))
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -570,12 +601,19 @@ struct MapHomeView: View {
                 }
                 .frame(width: 56, height: 56)
 
-                Text("\(viewModel.hasArrived ? 0 : viewModel.simulatedSpeedKPH) km/h")
+                Text(viewModel.isAboveDebriefSpeedThreshold
+                     ? "SPEEDING · \(viewModel.simulatedSpeedKPH) km/h"
+                     : "\(viewModel.hasArrived ? 0 : viewModel.simulatedSpeedKPH) km/h")
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 4)
-                    .background(.black.opacity(0.65), in: .capsule)
+                    .background(viewModel.isAboveDebriefSpeedThreshold
+                                ? Color.red.opacity(0.9)
+                                : Color.black.opacity(0.65),
+                                in: .capsule)
+                    .animation(.easeInOut(duration: 0.2),
+                               value: viewModel.isAboveDebriefSpeedThreshold)
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(
