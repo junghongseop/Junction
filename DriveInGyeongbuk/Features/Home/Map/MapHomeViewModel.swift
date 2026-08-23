@@ -271,14 +271,25 @@ final class MapHomeViewModel: ObservableObject {
     func navigateToNearestParking() async {
         guard isDriving, !isParkingRouteLoading,
               let destination,
-              let currentRoute = selectedRoute else { return }
+              selectedRoute != nil else { return }
+
+        // P를 누른 바로 그 지점을 새 경로의 출발점으로 고정한다. 좌표가 아직 발행되기 전인데
+        // 기존 목적지(`route.goal`)로 대신하면 주차 경로가 목적지에서 시작해 버린다.
+        guard let start = simulationState?.coordinate else {
+            parkingRouteErrorMessage = "현재 주행 위치를 확인한 뒤 다시 시도해 주세요."
+            return
+        }
 
         let requestID = UUID()
         parkingRouteRequestID = requestID
         isParkingRouteLoading = true
         parkingRouteErrorMessage = nil
 
-        let start = simulationState?.coordinate ?? currentRoute.goal
+        // 네트워크 응답을 기다리는 동안 차가 계속 이동하면 탐색 출발점과 화면의 차량 위치가
+        // 달라지고, 기존 카메라 갱신이 새 전체 경로 카메라를 덮는다. 진행 상태를 보존해 멈춰
+        // 두었다가 실패한 경우에만 같은 지점에서 재개한다.
+        simulationStartID = nil
+        routeSimulator.pause()
 
         do {
             let suggestions = try await parkingService.suggestions(
@@ -305,15 +316,16 @@ final class MapHomeViewModel: ObservableObject {
                 throw NaverMapsError.emptyResult
             }
 
+            // 이후에는 기존 시뮬레이터 상태가 필요 없다. 새 경로를 넣기 전에 완전히 비워서
+            // 전체 경로 보기와 줌인 사이에 예전 카메라 갱신이 끼어들지 못하게 한다.
+            routeSimulator.stop()
             route = fastest
             safeRoute = routes.first { $0.option == .comfortable }
             selectedRouteOption = fastest.option
             selectedParkingLot = nearest.lot
             isApproachingDestination = fastest.distance <= Int(Self.destinationApproachDistanceMeters)
 
-            // 기존 안내를 멈춘 뒤 새 경로를 전체 보기로 먼저 보여 준다.
-            simulationStartID = nil
-            routeSimulator.stop()
+            // 새 경로를 전체 보기로 먼저 보여 준다.
             isPreviewingParkingRoute = true
             routeMap.showParkingRouteOverview(fastest)
 
@@ -335,6 +347,9 @@ final class MapHomeViewModel: ObservableObject {
         } catch {
             guard parkingRouteRequestID == requestID else { return }
             parkingRouteErrorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            if isDriving {
+                routeSimulator.resume()
+            }
         }
 
         if parkingRouteRequestID == requestID {

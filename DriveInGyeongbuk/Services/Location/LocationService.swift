@@ -226,6 +226,10 @@ protocol RouteLocationSimulating: AnyObject {
     func start(route: DrivingRoute,
                maximumSpeedKilometersPerHour: Double,
                speedLimitSegments: [RouteSpeedLimitSegment])
+    /// 현재 진행 위치를 보존한 채 좌표 갱신만 잠시 멈춘다.
+    func pause()
+    /// `pause()` 직전의 진행 위치부터 좌표 갱신을 다시 시작한다.
+    func resume()
     func stop()
 }
 
@@ -278,10 +282,20 @@ final class RouteLocationSimulator: RouteLocationSimulating {
         chooseNextCruiseBehavior(at: Date())
         lastTick = Date()
         publishState()
+        scheduleTimer()
+    }
 
-        timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
-            self?.tick()
-        }
+    func pause() {
+        timer?.invalidate()
+        timer = nil
+        // 대기 시간을 이동 시간으로 계산하지 않도록 재개 시각부터 다시 잰다.
+        lastTick = nil
+    }
+
+    func resume() {
+        guard timer == nil, route != nil, cumulativeDistances.count >= 2 else { return }
+        lastTick = Date()
+        scheduleTimer()
     }
 
     func stop() {
@@ -296,6 +310,12 @@ final class RouteLocationSimulator: RouteLocationSimulating {
         demoSpeedingQualifiedSeconds = 0
         demoSpeedingPhase = .waiting
         lastTick = nil
+    }
+
+    private func scheduleTimer() {
+        timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+            self?.tick()
+        }
     }
 
     private func tick() {
