@@ -327,21 +327,20 @@ final class MapHomeViewModel: ObservableObject {
 
             // 새 경로를 전체 보기로 먼저 보여 준다.
             isPreviewingParkingRoute = true
-            routeMap.showParkingRouteOverview(fastest)
-
-            // 전체 경로 카메라 이동(0.9초) 뒤 약 1.2초간 경로를 읽을 시간을 준다.
-            try? await Task.sleep(nanoseconds: 2_100_000_000)
+            await routeMap.showParkingRouteOverview(fastest)
             guard parkingRouteRequestID == requestID, isDriving else { return }
 
-            let routeStart = fastest.path.first ?? fastest.start
-            routeMap.focusOnNavigationVehicle(
-                at: routeStart,
+            // 전체 경로 카메라 이동이 실제로 끝난 뒤 1.2초간 경로를 읽을 시간을 준다.
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            guard parkingRouteRequestID == requestID, isDriving else { return }
+
+            // API가 도로 중심으로 보정한 경로 시작점이 아니라 P를 누른 실제 좌표로 돌아간다.
+            await routeMap.focusOnNavigationVehicle(
+                at: start,
                 bearing: Self.bearingOfFirstSegment(in: fastest)
             )
-
-            // 차량 줌인 애니메이션이 끝난 다음 시뮬레이션을 재개해야 카메라가 튀지 않는다.
-            try? await Task.sleep(nanoseconds: 1_150_000_000)
             guard parkingRouteRequestID == requestID, isDriving else { return }
+            // 차량 줌인 애니메이션이 실제로 끝난 다음 시뮬레이션을 재개한다.
             isPreviewingParkingRoute = false
             beginDriving(on: fastest, departureDelay: 0, preparesMap: false, startsRecording: false)
         } catch {

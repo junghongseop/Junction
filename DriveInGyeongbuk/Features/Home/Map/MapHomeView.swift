@@ -570,9 +570,7 @@ struct MapHomeView: View {
                 }
                 .frame(width: 56, height: 56)
 
-                Text(viewModel.isAboveDebriefSpeedThreshold
-                     ? "SPEEDING · \(viewModel.simulatedSpeedKPH) km/h"
-                     : "\(viewModel.hasArrived ? 0 : viewModel.simulatedSpeedKPH) km/h")
+                Text("\(viewModel.hasArrived ? 0 : viewModel.simulatedSpeedKPH) km/h")
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 7)
