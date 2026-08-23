@@ -57,7 +57,9 @@ final class MapHomeViewModel: ObservableObject {
 
     /// 권한이 있을 때만 현위치 추적을 켠다. 권한 없이 켜면 SDK 가 빈 점을 들고 헛돈다.
     var isTrackingLocation: Bool {
-        authorization == .authorized && (destination == nil || isDriving)
+        !locationService.isSimulated
+            && authorization == .authorized
+            && (destination == nil || isDriving)
     }
 
     // MARK: 의존성
@@ -91,7 +93,7 @@ final class MapHomeViewModel: ObservableObject {
     /// 첫 좌표에서 한 번만 카메라를 옮긴다. 이후에는 SDK 의 추적 모드가 맡는다.
     private var hasCenteredOnUser = false
 
-    init(locationService: LocationServicing = LocationService(),
+    init(locationService: LocationServicing = makeDefaultLocationService(),
          directionsService: NaverDirectionsServicing = NaverDirectionsService(),
          routeSimulator: RouteLocationSimulating = RouteLocationSimulator(),
          speedLimitService: (any SpeedLimitServicing)? = try? SpeedLimitService(),
@@ -163,7 +165,11 @@ final class MapHomeViewModel: ObservableObject {
             return
         }
         map.focus(on: coordinate, zoom: Self.focusZoom)
-        map.moveToCurrentLocation()
+        if locationService.isSimulated {
+            map.showSimulatedCurrentLocation(at: coordinate)
+        } else {
+            map.moveToCurrentLocation()
+        }
     }
 
     /// 검색 화면에서 고른 목적지를 저장한다. 경로 요청은 미리보기 화면 진입 후 시작한다.
@@ -265,14 +271,25 @@ final class MapHomeViewModel: ObservableObject {
     func navigateToNearestParking() async {
         guard isDriving, !isParkingRouteLoading,
               let destination,
-              let currentRoute = selectedRoute else { return }
+              selectedRoute != nil else { return }
+
+        // P를 누른 바로 그 지점을 새 경로의 출발점으로 고정한다. 좌표가 아직 발행되기 전인데
+        // 기존 목적지(`route.goal`)로 대신하면 주차 경로가 목적지에서 시작해 버린다.
+        guard let start = simulationState?.coordinate else {
+            parkingRouteErrorMessage = "현재 주행 위치를 확인한 뒤 다시 시도해 주세요."
+            return
+        }
 
         let requestID = UUID()
         parkingRouteRequestID = requestID
         isParkingRouteLoading = true
         parkingRouteErrorMessage = nil
 
-        let start = simulationState?.coordinate ?? currentRoute.goal
+        // 네트워크 응답을 기다리는 동안 차가 계속 이동하면 탐색 출발점과 화면의 차량 위치가
+        // 달라지고, 기존 카메라 갱신이 새 전체 경로 카메라를 덮는다. 진행 상태를 보존해 멈춰
+        // 두었다가 실패한 경우에만 같은 지점에서 재개한다.
+        simulationStartID = nil
+        routeSimulator.pause()
 
         do {
             let suggestions = try await parkingService.suggestions(
@@ -299,36 +316,39 @@ final class MapHomeViewModel: ObservableObject {
                 throw NaverMapsError.emptyResult
             }
 
+            // 이후에는 기존 시뮬레이터 상태가 필요 없다. 새 경로를 넣기 전에 완전히 비워서
+            // 전체 경로 보기와 줌인 사이에 예전 카메라 갱신이 끼어들지 못하게 한다.
+            routeSimulator.stop()
             route = fastest
             safeRoute = routes.first { $0.option == .comfortable }
             selectedRouteOption = fastest.option
             selectedParkingLot = nearest.lot
             isApproachingDestination = fastest.distance <= Int(Self.destinationApproachDistanceMeters)
 
-            // 기존 안내를 멈춘 뒤 새 경로를 전체 보기로 먼저 보여 준다.
-            simulationStartID = nil
-            routeSimulator.stop()
+            // 새 경로를 전체 보기로 먼저 보여 준다.
             isPreviewingParkingRoute = true
-            routeMap.showParkingRouteOverview(fastest)
-
-            // 전체 경로 카메라 이동(0.9초) 뒤 약 1.2초간 경로를 읽을 시간을 준다.
-            try? await Task.sleep(nanoseconds: 2_100_000_000)
+            await routeMap.showParkingRouteOverview(fastest)
             guard parkingRouteRequestID == requestID, isDriving else { return }
 
-            let routeStart = fastest.path.first ?? fastest.start
-            routeMap.focusOnNavigationVehicle(
-                at: routeStart,
+            // 전체 경로 카메라 이동이 실제로 끝난 뒤 1.2초간 경로를 읽을 시간을 준다.
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            guard parkingRouteRequestID == requestID, isDriving else { return }
+
+            // API가 도로 중심으로 보정한 경로 시작점이 아니라 P를 누른 실제 좌표로 돌아간다.
+            await routeMap.focusOnNavigationVehicle(
+                at: start,
                 bearing: Self.bearingOfFirstSegment(in: fastest)
             )
-
-            // 차량 줌인 애니메이션이 끝난 다음 시뮬레이션을 재개해야 카메라가 튀지 않는다.
-            try? await Task.sleep(nanoseconds: 1_150_000_000)
             guard parkingRouteRequestID == requestID, isDriving else { return }
+            // 차량 줌인 애니메이션이 실제로 끝난 다음 시뮬레이션을 재개한다.
             isPreviewingParkingRoute = false
             beginDriving(on: fastest, departureDelay: 0, preparesMap: false, startsRecording: false)
         } catch {
             guard parkingRouteRequestID == requestID else { return }
             parkingRouteErrorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            if isDriving {
+                routeSimulator.resume()
+            }
         }
 
         if parkingRouteRequestID == requestID {
@@ -348,7 +368,7 @@ final class MapHomeViewModel: ObservableObject {
         if startsRecording {
             finishedDrive = nil
             driveRecorder.start(route: route,
-                                originName: nil,
+                                originName: locationService.isSimulated ? DemoDriveLocation.originName : nil,
                                 destinationName: destination?.displayTitle)
         }
         simulationState = nil
@@ -426,6 +446,10 @@ final class MapHomeViewModel: ObservableObject {
     }
     var simulatedSpeedKPH: Int { simulationState?.currentSpeedKPH ?? 0 }
     var simulatedSpeedLimitKPH: Int? { simulationState?.speedLimitKPH }
+    var isAboveDebriefSpeedThreshold: Bool {
+        guard let limit = simulatedSpeedLimitKPH else { return false }
+        return simulatedSpeedKPH > limit + 5
+    }
     var hasArrived: Bool { simulationState?.isFinished == true }
 
     /// 주행 종료 버튼을 보여 줄지.
@@ -584,6 +608,9 @@ final class MapHomeViewModel: ObservableObject {
     private func centerOnUser(_ coordinate: NaverCoordinate) {
         hasCenteredOnUser = true
         map.focus(on: coordinate, zoom: Self.focusZoom, animated: false)
+        if locationService.isSimulated {
+            map.showSimulatedCurrentLocation(at: coordinate)
+        }
     }
 
     private static func message(for authorization: LocationAuthorization) -> String? {

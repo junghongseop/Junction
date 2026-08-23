@@ -29,6 +29,10 @@ struct MapHomeView: View {
     @State private var navigationPath: [DestinationRoute] = []
     @State private var isVoiceGuidanceMuted = false
     @State private var isShowingDriveSettings = false
+    @State private var hasAutomaticallyOpenedSearch = false
+    @State private var hasAutomaticallyStartedDrive = false
+    @State private var hasAutomaticallyRequestedParking = false
+    @State private var hasAutomaticallyFinishedDrive = false
 
     /// 시안 값. 지도 로고가 하단 탭바에 가리지 않도록 띄우는 여백이기도 하다.
     private let horizontalMargin: CGFloat = 16
@@ -41,7 +45,12 @@ struct MapHomeView: View {
                 .navigationDestination(for: DestinationRoute.self) { route in
                     switch route {
                     case .search:
-                        SearchView(initialQuery: viewModel.searchText) { location in
+                        SearchView(
+                            initialQuery: viewModel.searchText,
+                            automaticDemoQuery: DemoDriveLocation.isAutomationEnabled
+                                ? DemoDriveLocation.destinationName
+                                : nil
+                        ) { location in
                             viewModel.prepareDestination(location)
                             // 검색 화면을 스택에 남겨 경로 화면의 기본 뒤로가기가 검색으로 돌아가게 한다.
                             navigationPath.append(.routePreview)
@@ -71,6 +80,62 @@ struct MapHomeView: View {
         }
         .onAppear { viewModel.onAppear() }
         .onDisappear { viewModel.onDisappear() }
+        .task {
+            guard DemoDriveLocation.isAutomationEnabled,
+                  !hasAutomaticallyOpenedSearch else { return }
+            hasAutomaticallyOpenedSearch = true
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled,
+                  navigationPath.isEmpty,
+                  viewModel.destination == nil else { return }
+            navigationPath.append(.search)
+        }
+        .task(id: viewModel.route?.id) {
+            guard DemoDriveLocation.isAutomationEnabled,
+                  viewModel.route != nil,
+                  viewModel.destination != nil,
+                  !viewModel.isDriving,
+                  viewModel.selectedParkingLot == nil,
+                  navigationPath.contains(.routePreview),
+                  !hasAutomaticallyStartedDrive else { return }
+            hasAutomaticallyStartedDrive = true
+            // 경로 카드와 지도 경로가 모두 보인 다음 Start 동작을 재현한다.
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            viewModel.startDriving()
+        }
+        .task(id: viewModel.canSuggestParking) {
+            guard DemoDriveLocation.isAutomationEnabled,
+                  viewModel.canSuggestParking,
+                  !hasAutomaticallyRequestedParking else { return }
+            hasAutomaticallyRequestedParking = true
+
+            // 300m 지점에서 제한구역 조회 결과와 빨간 도로선을 2초간 보여 준다.
+            while viewModel.isParkingRestrictionsLoading, !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled, viewModel.canSuggestParking else { return }
+            await viewModel.navigateToNearestParking()
+        }
+        .task(id: viewModel.selectedParkingLot?.id) {
+            guard DemoDriveLocation.isAutomationEnabled,
+                  viewModel.selectedParkingLot != nil,
+                  !hasAutomaticallyFinishedDrive else { return }
+            hasAutomaticallyFinishedDrive = true
+
+            // 주차 경로 미리보기와 실제 주행이 끝날 때까지 기다린 뒤 Finish 를 누른다.
+            while viewModel.isDriving,
+                  (viewModel.isParkingRouteLoading
+                   || viewModel.isPreviewingParkingRoute
+                   || !viewModel.hasArrived),
+                  !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(150))
+            }
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled, viewModel.isDriving, viewModel.hasArrived else { return }
+            viewModel.finishDriving()
+        }
     }
 
     /// `@Published private(set)` 은 그대로 바인딩할 수 없어서 읽기/닫기만 이어 준다.
@@ -360,7 +425,7 @@ struct MapHomeView: View {
 
     private var approachingDestinationHeader: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Approaching destination")
+            Text("Approaching destination · 300 m")
                 .font(.system(size: 32, weight: .bold))
                 .foregroundStyle(Color(red: 218 / 255, green: 226 / 255, blue: 253 / 255))
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -373,11 +438,11 @@ struct MapHomeView: View {
                 }
 
             HStack(spacing: 10) {
-                Image(systemName: "exclamationmark.triangle.fill")
+                Image(systemName: parkingRestrictionSymbol)
                     .font(.system(size: 24, weight: .bold))
                     .foregroundStyle(Color(red: 1, green: 180 / 255, blue: 171 / 255))
 
-                Text("No parking in red zones")
+                Text(parkingRestrictionStatusText)
                     .font(.system(size: 20, weight: .bold))
                     .foregroundStyle(Color(red: 1, green: 132 / 255, blue: 118 / 255))
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -393,6 +458,22 @@ struct MapHomeView: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityHint(viewModel.parkingRestrictionErrorMessage ?? "Red roads show no-parking zones.")
+    }
+
+    private var parkingRestrictionSymbol: String {
+        if viewModel.isParkingRestrictionsLoading { return "arrow.triangle.2.circlepath" }
+        if viewModel.parkingRestrictionErrorMessage != nil { return "wifi.exclamationmark" }
+        return viewModel.parkingRestrictions.isEmpty
+            ? "checkmark.circle.fill"
+            : "exclamationmark.triangle.fill"
+    }
+
+    private var parkingRestrictionStatusText: String {
+        if viewModel.isParkingRestrictionsLoading { return "Checking parking restrictions…" }
+        if viewModel.parkingRestrictionErrorMessage != nil { return "Unable to verify restricted zones" }
+        let count = viewModel.parkingRestrictions.count
+        if count == 0 { return "No restricted zones found nearby" }
+        return count == 1 ? "1 no-parking zone nearby" : "\(count) no-parking zones nearby"
     }
 
     private var regularManeuverCard: some View {
@@ -494,7 +575,12 @@ struct MapHomeView: View {
                     .foregroundStyle(.white)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 4)
-                    .background(.black.opacity(0.65), in: .capsule)
+                    .background(viewModel.isAboveDebriefSpeedThreshold
+                                ? Color.red.opacity(0.9)
+                                : Color.black.opacity(0.65),
+                                in: .capsule)
+                    .animation(.easeInOut(duration: 0.2),
+                               value: viewModel.isAboveDebriefSpeedThreshold)
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(

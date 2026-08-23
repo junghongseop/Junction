@@ -64,8 +64,10 @@ nonisolated struct SustainedSpeedingDetector: DriveEventDetecting {
                 current = []
                 continue
             }
-            // 구간이 바뀌면 별개의 사건으로 끊는다. 제한속도가 다르면 이야기가 다르다.
-            if let previous = current.last, previous.segment.id != entry.segment.id {
+            // 도로 링크가 달라도 제한속도가 같으면 연속 과속이다. 제한속도 자체가
+            // 바뀌는 순간에만 별개의 사건으로 끊는다.
+            if let previous = current.last,
+               previous.segment.limitKPH != entry.segment.limitKPH {
                 runs.append(current)
                 current = []
             }

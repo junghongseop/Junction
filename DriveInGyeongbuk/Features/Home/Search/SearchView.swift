@@ -18,9 +18,13 @@ struct SearchView: View {
     @FocusState private var isSearchFocused: Bool
 
     private let onSelect: (NaverLocation) -> Void
+    private let automaticDemoQuery: String?
 
-    init(initialQuery: String = "", onSelect: @escaping (NaverLocation) -> Void) {
+    init(initialQuery: String = "",
+         automaticDemoQuery: String? = nil,
+         onSelect: @escaping (NaverLocation) -> Void) {
         _viewModel = StateObject(wrappedValue: SearchViewModel(initialQuery: initialQuery))
+        self.automaticDemoQuery = automaticDemoQuery
         self.onSelect = onSelect
     }
 
@@ -52,8 +56,40 @@ struct SearchView: View {
         }
         .task {
             isSearchFocused = true
-            if viewModel.canSearch { await viewModel.search() }
+            if let automaticDemoQuery {
+                await runAutomaticDemoSearch(query: automaticDemoQuery)
+            } else if viewModel.canSearch {
+                await viewModel.search()
+            }
         }
+    }
+
+    /// 키보드가 올라온 뒤 글자가 실제 입력되는 모습을 보여 주고, 검색 결과가 나타나면
+    /// 데모 목적지 행을 선택한다. 네트워크 검색 자체는 수동 검색과 완전히 같은 경로를 탄다.
+    @MainActor
+    private func runAutomaticDemoSearch(query: String) async {
+        viewModel.clear()
+        try? await Task.sleep(for: .milliseconds(550))
+        guard !Task.isCancelled else { return }
+
+        for character in query {
+            viewModel.query.append(character)
+            try? await Task.sleep(for: .milliseconds(260))
+            guard !Task.isCancelled else { return }
+        }
+
+        try? await Task.sleep(for: .milliseconds(450))
+        await viewModel.search()
+        guard !Task.isCancelled else { return }
+
+        // `영천시청점` 상점이 아니라 공식 주소의 시청 본체를 결과에 표시하고 선택한다.
+        let selected = viewModel.ensureDemoDestinationResult()
+
+        // 결과가 나타난 것을 관객이 읽을 시간을 둔 뒤 행 선택을 재현한다.
+        try? await Task.sleep(for: .seconds(1.2))
+        guard !Task.isCancelled else { return }
+        isSearchFocused = false
+        onSelect(selected)
     }
 
     private var searchField: some View {
